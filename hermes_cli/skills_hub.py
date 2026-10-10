@@ -1029,12 +1029,12 @@ def do_check(name: Optional[str] = None, console: Optional[Console] = None) -> N
 def _has_local_edits(installed: dict) -> bool:
     """True when the on-disk content no longer matches the install-time hash."""
     from tools.skills_hub import SKILLS_DIR
-    from tools.skills_guard import content_hash
+    from tools.skills_hub_install import installed_content_unchanged
     recorded_hash = installed.get("content_hash", "")
     skill_path = SKILLS_DIR / installed.get("install_path", "")
     try:
         return (bool(recorded_hash) and skill_path.is_dir()
-                and content_hash(skill_path) != recorded_hash)
+                and not installed_content_unchanged(skill_path, recorded_hash))
     except OSError:
         return False
 

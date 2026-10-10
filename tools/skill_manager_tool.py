@@ -120,7 +120,7 @@ _NAME_RULE = "Use lowercase letters, numbers, hyphens, dots, and underscores."
 def _check_identifier(value: str, label: str, invalid: str) -> Optional[str]:
     if len(value) > MAX_NAME_LENGTH:
         return f"{label} exceeds {MAX_NAME_LENGTH} characters."
-    return None if VALID_NAME_RE.match(value) else invalid
+    return None if VALID_NAME_RE.fullmatch(value) else invalid  # `$` would admit a trailing newline
 
 
 def _validate_name(name: str) -> Optional[str]:
@@ -205,7 +205,7 @@ def _resolve_skill_dir(name: str, category: str | None = None) -> Path:
         base = get_skill_create_dir() or base
     except Exception:
         logger.debug("skills.create_dir lookup failed", exc_info=True)
-    return base / (category or "") / name
+    return base / (category or "").strip() / name  # the form _validate_category accepted
 
 
 def _iter_skill_dirs(root: Path):
@@ -352,19 +352,23 @@ def _skill_not_found_error(name: str, suffix: str = "") -> str:
     return base + suffix
 
 
+def _names_skill_md(file_path: Optional[str], skill_dir: Path) -> bool:
+    """``SKILL.md`` or ``<skill>/SKILL.md``: the skill document itself, not a supporting file."""
+    return bool(file_path) and Path(file_path).parts in (("SKILL.md",), (skill_dir.name, "SKILL.md"))
+
+
 def _validate_file_path(file_path: str) -> Optional[str]:
-    """Validate a write_file/remove_file path: under an allowed subdir, no escape."""
+    """Validate a supporting-file path: under an allowed subdir, no escape."""
     from tools.path_security import has_traversal_component
     if not file_path:
         return "file_path is required."
     parts = Path(file_path).parts
-    # Traversal first, so the SKILL.md exception is unreachable by a traversal-laden path.
     if has_traversal_component(file_path):
         return "Path traversal ('..') is not allowed."
-    # SKILL.md lives at the skill root; accept 'SKILL.md' and '<skill>/SKILL.md'.
-    if parts and parts[-1] == "SKILL.md" and len(parts) in (1, 2):
-        return None
     if not parts or parts[0] not in ALLOWED_SUBDIRS:
+        if parts and parts[-1] == "SKILL.md" and len(parts) <= 2:  # the document has its own write paths
+            return ("SKILL.md is the skill document, not a supporting file: change it with "
+                    "action='patch' and remove the skill with action='delete'.")
         allowed = ", ".join(sorted(ALLOWED_SUBDIRS))
         return f"File must be under one of: {allowed}. Got: '{file_path}'"
     if len(parts) < 2:
@@ -517,6 +521,8 @@ def _patch_skill(name: str, old_string: str, new_string: str, file_path: str | N
     skill_dir, guard = _locate_for_write(name, "patch")
     if guard:
         return guard
+    if _names_skill_md(file_path, skill_dir):
+        file_path = None  # an explicit SKILL.md gets the default target's frontmatter check
     target_label = file_path or "SKILL.md"
     if file_path:
         target, err = _resolve_supporting_file(skill_dir, file_path)

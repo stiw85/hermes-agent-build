@@ -214,7 +214,7 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
                     description = next((ln for ln in map(str.strip, body.strip().split("\n"))
                                         if ln and not ln.startswith("#")), description)
                 scanned.append({
-                    "name": frontmatter.get("name", skill_md.parent.name)[:MAX_NAME_LENGTH],
+                    "name": _declared_name(frontmatter, skill_md.parent.name)[:MAX_NAME_LENGTH],
                     "description": _truncate_description(description),
                     "category": _get_category_from_path(skill_md), "tier": tier, "root": scan_dir,
                     "path": skill_md, "visible": bool(skill_matches_platform(frontmatter)
@@ -230,6 +230,12 @@ def _skill_catalog(*, skip_disabled: bool = False, include_hidden: bool = False)
     # signature, so the next call re-scans instead of serving a torn result.
     _SKILLS_CACHE[cache_key] = (signature, now, skills)
     return [dict(s) for s in skills]
+
+
+def _declared_name(frontmatter: dict[str, Any], fallback: str) -> str:
+    """Frontmatter ``name`` as text, else *fallback*: YAML reads ``name: 2048`` as an int and
+    ``name:`` as null, and neither may hide the skill from listing or lookup."""
+    return str(frontmatter.get("name") or fallback)
 
 
 def _find_all_skills(*, skip_disabled: bool = False) -> list[dict[str, Any]]:
@@ -371,7 +377,7 @@ def _collect_skill_candidates(name, local_category_name, all_dirs):
         # exposes the frontmatter name, so skill_view(name) must accept it too.
         for found_skill_md in iter_skill_index_files(search_dir, "SKILL.md"):
             if (found_skill_md.parent.name == name
-                    or _safe_frontmatter(found_skill_md).get("name") == name):
+                    or _declared_name(_safe_frontmatter(found_skill_md), found_skill_md.parent.name) == name):
                 _record(found_skill_md.parent, found_skill_md)
         # Legacy flat <name>.md anywhere under the dir. Markdown owned by an ancestor
         # directory skill loads through file_path and must not shadow a real skill.
@@ -580,7 +586,7 @@ def skill_view(
         frontmatter = _safe_frontmatter(content=content)
         if not skill_matches_platform(frontmatter):
             return _fail(f"Skill '{name}' is not supported on this platform.", readiness_status=SkillReadinessStatus.UNSUPPORTED.value)
-        resolved_name = frontmatter.get("name", skill_md.parent.name)
+        resolved_name = _declared_name(frontmatter, skill_md.parent.name)
         # Disabled by declared name, or by the exact path that IS this copy's load name (a same-tier
         # duplicate's row) — whatever alias reached it; an unrelated copy at that path elsewhere is not.
         rel = _owned_relative(skill_dir, skill_md, all_dirs)
@@ -601,7 +607,7 @@ def skill_view(
             rel_path = str(skill_md.relative_to(active_skills_dir))
         except ValueError:  # external skill — relative to its own parent dir
             rel_path = str(skill_md.relative_to(skill_md.parent.parent)) if skill_md.parent.parent else skill_md.name
-        skill_name = frontmatter.get("name", skill_md.stem if not skill_dir else skill_dir.name)
+        skill_name = _declared_name(frontmatter, skill_md.stem if not skill_dir else skill_dir.name)
         readiness, readiness_extras = _skill_readiness(frontmatter, skill_name)
         rendered_content = content if not preprocess else _preprocess_skill(
             content, skill_dir, task_id, "Could not preprocess skill content for %s", skill_name)
