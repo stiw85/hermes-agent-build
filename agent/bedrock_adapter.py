@@ -695,7 +695,9 @@ def _image_block_from_data_url(url: str) -> dict:
         raw_bytes = base64.b64decode(data)
     except Exception:
         raw_bytes = data.encode("utf-8")
-    return {"image": {"format": media_type.split("/")[-1] if "/" in media_type else "jpeg", "source": {"bytes": raw_bytes}}}
+    image_format = media_type.split("/")[-1] if "/" in media_type else "jpeg"
+    # Converse's format enum has no "jpg".
+    return {"image": {"format": "jpeg" if image_format == "jpg" else image_format, "source": {"bytes": raw_bytes}}}
 
 
 def _convert_content_to_converse(content) -> list[dict]:
@@ -713,6 +715,16 @@ def _convert_content_to_converse(content) -> list[dict]:
             url = image_url.get("url", "") if isinstance(image_url, dict) else ""
             blocks.append(_image_block_from_data_url(url) if url.startswith("data:") else {"text": f"[Image: {url}]"})
     return blocks or [dict(_PLACEHOLDER_BLOCK)]
+
+
+def _tool_result_blocks(content) -> list[dict]:
+    """Tool content → ``toolResult`` blocks. A list of text / image parts converts like user content
+    (an image stays an image block, never base64 text); anything else is serialised as text."""
+    if isinstance(content, list) and content and all(
+        isinstance(part, dict) and part.get("type") in ("text", "image_url") for part in content
+    ):
+        return _convert_content_to_converse(content)
+    return [{"text": _safe_text(content if isinstance(content, str) else json.dumps(content))}]
 
 
 def _system_blocks(content) -> list[dict]:
@@ -766,11 +778,13 @@ def _replay_ordered_blocks(ordered_blocks: list) -> list[dict]:
 
 
 def _parse_tool_args(args) -> Any:
-    """JSON-decode a tool-call argument string; {} on failure; non-str passes through."""
+    """Tool-call arguments (JSON string or dict) as the object ``toolUse.input`` requires; {} on
+    a parse failure or valid non-object JSON (``null``, a list, a scalar)."""
     try:
-        return json.loads(args) if isinstance(args, str) else args
+        parsed = json.loads(args) if isinstance(args, str) else args
     except (json.JSONDecodeError, TypeError):
         return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _assistant_blocks(msg: dict, content) -> list[dict]:
@@ -813,9 +827,8 @@ def convert_messages_to_converse(messages: list[dict]) -> tuple[Optional[list[di
         if role == "system":
             system_blocks.extend(_system_blocks(content))
         elif role == "tool":
-            result_content = content if isinstance(content, str) else json.dumps(content)
             append_turn("user", [{"toolResult": {
-                "toolUseId": msg.get("tool_call_id", ""), "content": [{"text": _safe_text(result_content)}]}}])
+                "toolUseId": msg.get("tool_call_id", ""), "content": _tool_result_blocks(content)}}])
         elif role == "assistant":
             append_turn("assistant", _assistant_blocks(msg, content) or [dict(_PLACEHOLDER_BLOCK)])
         elif role == "user":

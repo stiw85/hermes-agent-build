@@ -359,6 +359,13 @@ def _to_decimal(value: Any) -> Optional[Decimal]:
         return None
 
 
+def _catalog_rate(value: Any) -> Optional[Decimal]:
+    """A catalog price as a rate; None for a missing, non-finite or NEGATIVE one. OpenRouter
+    publishes ``"-1"`` for router pseudo-models (``openrouter/auto``): variable, not a price."""
+    rate = _to_decimal(value)
+    return rate if rate is not None and rate.is_finite() and rate >= 0 else None
+
+
 def _usage_field(obj: Any, *path: str) -> int:
     """Non-negative int at ``obj.path[0].path[1]...``; 0 if any hop is falsy or
     non-numeric. Hops read dicts and attribute objects alike (the Responses API
@@ -514,12 +521,12 @@ def _pricing_entry_from_metadata(
         raw = pricing.get(key)
         for alias in aliases:  # alias chain is truthiness-based (``a or b or c``)
             raw = raw or pricing.get(alias)
-        value = _to_decimal(raw)
+        value = _catalog_rate(raw)
         return None if value is None else value * _ONE_MILLION
 
     prompt = per_million("prompt")
     completion = per_million("completion")
-    request = _to_decimal(pricing.get("request"))
+    request = _catalog_rate(pricing.get("request"))
     if prompt is None and completion is None and request is None:
         return None
     return PricingEntry(
@@ -743,11 +750,13 @@ def has_known_pricing(
 
 
 def format_duration_compact(seconds: float) -> str:
-    if seconds < 60:
+    # The unit is chosen on the ROUNDED value, so 59.6s reads "1m" and 59m30s "1h", never "60s" / "60m".
+    if round(seconds) < 60:
         return f"{seconds:.0f}s"
     minutes = seconds / 60
-    if minutes < 60:
+    if round(minutes) < 60:
         return f"{minutes:.0f}m"
+    minutes = max(minutes, 60.0)
     hours = minutes / 60
     if hours < 24:
         remaining_min = int(minutes % 60)
@@ -761,9 +770,12 @@ def format_token_count_compact(value: int) -> str:
         return str(int(value))
 
     sign = "-" if value < 0 else ""
-    threshold, suffix = next((t, sfx) for t, sfx in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")) if abs_value >= t)
-    scaled = abs_value / threshold
+    units = ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K"))
+    index = next(i for i, (threshold, _) in enumerate(units) if abs_value >= threshold)
+    scaled = abs_value / units[index][0]
     text = f"{scaled:.2f}" if scaled < 10 else f"{scaled:.1f}" if scaled < 100 else f"{scaled:.0f}"
     if "." in text:
         text = text.rstrip("0").rstrip(".")
-    return f"{sign}{text}{suffix}"
+    if text == "1000" and index:  # rounded up across the boundary: 999,500 is "1M", not "1000K"
+        text, index = "1", index - 1
+    return f"{sign}{text}{units[index][1]}"

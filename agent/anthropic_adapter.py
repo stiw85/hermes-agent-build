@@ -27,6 +27,7 @@ from agent.anthropic_message_convert import (
     convert_messages_to_anthropic, convert_tools_to_anthropic, normalize_model_name,
 )
 from agent.errors import EmptyStreamError
+from agent.reasoning_effort import clamp_effort
 
 from hermes_cli.version_info import get_version_info
 
@@ -617,11 +618,14 @@ def _thinking_kwargs(reasoning_config: dict[str, Any], model: str, effective_max
         if adaptive_effort == "xhigh" and not _supports_xhigh_effort(model):
             adaptive_effort = "max"
         return {"thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": adaptive_effort}}
-    budget = THINKING_BUDGET.get(effort, 8000)
+    # The budget table stops at xhigh: stronger asks take its top level, never the medium default.
+    # Budget and the max_tokens bump both stay inside the model's own output cap.
+    ceiling = _get_anthropic_max_output(model)
+    budget = min(THINKING_BUDGET.get(clamp_effort(effort, tuple(THINKING_BUDGET)), 8000), max(ceiling - 4096, 1024))
     return {
         "thinking": {"type": "enabled", "budget_tokens": budget},
         "temperature": 1,  # required when thinking is enabled on older models
-        "max_tokens": max(effective_max_tokens, budget + 4096),
+        "max_tokens": max(effective_max_tokens, min(budget + 4096, ceiling)),
     }
 
 

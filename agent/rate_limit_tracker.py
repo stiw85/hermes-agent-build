@@ -7,6 +7,7 @@ and formats them for the /usage slash command. Reset values are seconds.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
@@ -77,6 +78,20 @@ def _safe_int(value: Any, default: Any = 0) -> Any:
         return default
 
 
+# OpenAI / Groq write the reset as a Go duration ("1s", "6m0s", "2m59.56s", "6ms").
+_RESET_DURATION_RE = re.compile(r"(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?")
+
+
+def _reset_seconds(value: Any) -> float:
+    """Reset header in seconds: a plain number (Nous Portal) or a Go duration; 0.0 when unreadable."""
+    seconds = _safe_float(value, None)
+    if seconds is not None or not isinstance(value, str):
+        return seconds or 0.0
+    match = _RESET_DURATION_RE.fullmatch(value.strip())
+    hours, minutes, secs, millis = (float(part or 0) for part in match.groups()) if match else (0.0,) * 4
+    return hours * 3600 + minutes * 60 + secs + millis / 1000
+
+
 def lower_headers(headers: Optional[Mapping[str, str]]) -> dict[str, str]:
     """Lowercase header names (HTTP header names are case-insensitive)."""
     return {k.lower(): v for k, v in headers.items()} if headers else {}
@@ -97,7 +112,7 @@ def parse_rate_limit_headers(headers: Mapping[str, str], provider: str = "") -> 
         attr: RateLimitBucket(
             limit=_safe_int(lowered.get(f"x-ratelimit-limit-{tag}")),
             remaining=_safe_int(lowered.get(f"x-ratelimit-remaining-{tag}")),
-            reset_seconds=_safe_float(lowered.get(f"x-ratelimit-reset-{tag}")),
+            reset_seconds=_reset_seconds(lowered.get(f"x-ratelimit-reset-{tag}")),
             captured_at=now,
         )
         for attr, tag in _BUCKET_TAGS
@@ -110,7 +125,7 @@ def parse_rate_limit_headers(headers: Mapping[str, str], provider: str = "") -> 
 
 def _fmt_count(n: int) -> str:
     """Human-friendly number: 7999856 -> '8.0M', 33599 -> '33.6K', 799 -> '799'."""
-    if n >= 1_000_000:
+    if n >= 999_950:  # where one decimal of K would round up to "1000.0K"
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
         return f"{n / 1_000:.1f}K"

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import time
+from datetime import timezone
 from typing import Any, Optional, Tuple
 
 from agent.secret_scope import get_secret as _get_secret, is_multiplex_active
@@ -138,10 +139,14 @@ def _load_credentials(resolved_path: Optional[str], sa_raw: Optional[bytes]) -> 
 
 def _needs_refresh(creds) -> bool:
     """No token, expired, or within 5 minutes of expiry."""
+    expiry = getattr(creds, "expiry", None)
+    if expiry is not None and expiry.tzinfo is None:
+        # google-auth keeps expiry as naive UTC; .timestamp() would read a naive value as local time.
+        expiry = expiry.replace(tzinfo=timezone.utc)
     return (
         not getattr(creds, "token", None)
         or getattr(creds, "expired", False)
-        or (getattr(creds, "expiry", None) is not None and (creds.expiry.timestamp() - time.time()) < 300)
+        or (expiry is not None and (expiry.timestamp() - time.time()) < 300)
     )
 
 

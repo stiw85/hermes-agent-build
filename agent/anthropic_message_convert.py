@@ -55,11 +55,13 @@ def _text_block_with_citations(text: Any, cits: Any) -> dict[str, Any]:
 
 
 def _parse_tool_args(raw: Any) -> Any:
-    """JSON-decode a tool_call ``arguments`` string; non-strings pass through, bad JSON -> {}."""
+    """Tool-call ``arguments`` (JSON string or dict) as the object ``tool_use.input`` requires;
+    bad JSON and valid non-object JSON (``null``, a list, a scalar) -> {}."""
     try:
-        return json.loads(raw) if isinstance(raw, str) else raw
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
     except (json.JSONDecodeError, ValueError):
         return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _strip_thinking(blocks: list[Any]) -> list[Any]:
@@ -411,7 +413,7 @@ def _convert_assistant_message(m: dict[str, Any]) -> dict[str, Any]:
         blocks.extend(kept)
     elif content and str(content).strip():
         blocks.append(_text_block(str(content)))
-    for tc in m.get("tool_calls", []):
+    for tc in m.get("tool_calls") or []:
         if not tc or not isinstance(tc, dict):
             continue
         fn = tc.get("function", {})
@@ -444,7 +446,10 @@ def _tool_result_content(m: dict[str, Any]) -> Any:
             multimodal_blocks = [_text_block(str(content["text_summary"]))]
     elif isinstance(content, list):
         converted = _content_parts_to_anthropic_blocks(content)
-        if _has_block_type(converted, {"image"}):
+        # Text-only part lists (what image eviction leaves behind) are blocks too; a list that is
+        # not made of parts keeps the JSON form below.
+        all_parts = len(converted) == len(content) and all(isinstance(p, dict) for p in content)
+        if _has_block_type(converted, {"image"}) or (converted and all_parts):
             multimodal_blocks = converted
     if multimodal_blocks is None:  # back-compat: blocks stashed under a private key
         stashed = m.get("_anthropic_content_blocks")
