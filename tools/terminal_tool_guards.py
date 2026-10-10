@@ -71,6 +71,9 @@ _INLINE_BACKGROUND_AMP_RE = re.compile(r"\s&\s")
 _TRAILING_BACKGROUND_AMP_RE = re.compile(r"\s&\s*(?:#.*)?$")
 
 
+_QUOTED_SPAN_RE = re.compile(r"""'[^']*'|"(?:[^"\\]|\\.)*"|`[^`]*`""")
+
+
 def _strip_quotes(command: str) -> str:
     """Blank quoted / backtick content and provably-inert heredoc bodies so
     regex checks can't match keywords (nohup, setsid, '&') inside strings.
@@ -80,20 +83,25 @@ def _strip_quotes(command: str) -> str:
     quoted, terminated delimiter on a simple opener fed to a known non-shell
     consumer is masked, so a real background operator can't hide in one.
     """
-    result = strip_inert_heredoc_bodies(command)
-    result = re.sub(r"'[^']*'", "''", result)
-    result = re.sub(r'"(?:[^"\\]|\\.)*"', '""', result)
-    return re.sub(r"`[^`]*`", "``", result)
+    # One left-to-right pass: per-quote-kind passes pair an apostrophe inside "..." with a later
+    # real single quote and un-quote everything between them.
+    return _QUOTED_SPAN_RE.sub(lambda m: m.group(0)[0] * 2, strip_inert_heredoc_bodies(command))
 
 
-_LONG_LIVED_FOREGROUND_PATTERNS = tuple(re.compile(p, re.IGNORECASE) for p in (
+# Start of a simple command, past VAR=VAL assignments, runner prefixes and a directory prefix: a
+# server binary only counts as the program being run, never as an argument (`pip install uvicorn`,
+# `grep nodemon package.json`).
+_SERVER_COMMAND_START = (
+    r"(?:^|[;&|(]\s*|\$\(\s*)(?:\w+=\S*\s+)*"
+    r"(?:(?:sudo|exec|time|npx|bunx|(?:npm|pnpm|yarn|bun)(?:\s+(?:exec|run|dlx|x))?|"
+    r"(?:uv|poetry|pipenv)\s+run|python[\d.]*\s+-m)\s+)*(?:\S*/)?"
+)
+_LONG_LIVED_FOREGROUND_PATTERNS = tuple(re.compile(p, re.IGNORECASE | re.MULTILINE) for p in (
     r"\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|watch)\b",
     r"\bdocker\s+compose\s+up\b",
     r"\bnext\s+dev\b",
-    r"\bvite(?:\s|$)",
-    r"\bnodemon\b",
-    r"\buvicorn\b",
-    r"\bgunicorn\b",
+    _SERVER_COMMAND_START + r"vite(?:\s|$)",
+    _SERVER_COMMAND_START + r"(?:nodemon|uvicorn|gunicorn)\b",
     r"\bpython(?:3)?\s+-m\s+http\.server\b",
 ))
 

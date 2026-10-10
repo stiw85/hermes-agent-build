@@ -37,15 +37,21 @@ _URL_RE = re.compile(r"https?://\S+")
 _MEDIA_PATH_RE = re.compile(r"MEDIA:\S+?(?=[.,;:!?)\]]*(?:\s|$))")
 
 _DEGREE_UNITS = (("C", "Celsius"), ("F", "Fahrenheit"))
-# Unit suffix (regex, after a digit) -> spoken word; km/h variants before the bare "m".
+# Unit suffix (regex, after a digit) -> spoken word; km/h variants before the bare "m". The
+# metric lengths are lowercase only: "5M" / "3 MM" are millions, not metres.
 _UNIT_WORDS = (
-    (r"km\s*/\s*h", "kilometres per hour"), (r"km/h", "kilometres per hour"),
+    (r"(?i:km\s*/\s*h)", "kilometres per hour"),
     (r"mm", "millimetres"), (r"cm", "centimetres"), (r"m", "metres"))
-# Currency prefix (regex) -> spoken word; order matters (NZ$/A$/US$ before bare $).
+# Currency prefix (regex) -> spoken word; order matters (NZ$/CA$/A$/US$ before bare $, and
+# CA$ before A$ so it is never read as "C" plus Australian dollars).
 _CURRENCY_WORDS = (
-    (r"NZ\$", "New Zealand dollars", re.IGNORECASE), (r"A\$", "Australian dollars", re.IGNORECASE),
+    (r"NZ\$", "New Zealand dollars", re.IGNORECASE), (r"CA?\$", "Canadian dollars", re.IGNORECASE),
+    (r"(?<![A-Za-z])A\$", "Australian dollars", re.IGNORECASE),
     (r"US\$", "US dollars", re.IGNORECASE), ("€", "euros", 0), ("£", "pounds", 0), (r"\$", "dollars", 0),
 )
+
+# Magnitude suffix glued to a money amount ("$5M"): spoken before the currency word.
+_MAGNITUDE_WORDS = {"K": "thousand", "M": "million", "MM": "million", "B": "billion"}
 
 # Broad emoji / pictograph cleanup: most voice providers read emojis as awkward labels.
 _EMOJI_RE = re.compile(
@@ -112,7 +118,7 @@ def normalize_symbols_for_tts(text: str) -> str:
     text = re.sub(r"(?<!\w)([-+]?\d+(?:\.\d+)?)\s*°", r"\1 degrees", text).replace("°", " degrees")
     # Common weather/travel units.
     for pattern, word in _UNIT_WORDS:
-        text = re.sub(r"(?<=\d)\s*" + pattern + r"\b", " " + word, text, flags=re.IGNORECASE)
+        text = re.sub(r"(?<=\d)\s*" + pattern + r"\b", " " + word, text)
     # Numeric rates only ("5/month" -> "5 per month").  Requiring digit-then-letter
     # keeps "and/or", "N/A", "TCP/IP" and dates like "2026/06" intact.
     text = re.sub(r"(?<=\d)\s*/\s*(?=[A-Za-z])", " per ", text)
@@ -120,7 +126,8 @@ def normalize_symbols_for_tts(text: str) -> str:
     # comma ("A$50, ...") is not swallowed into the spoken amount. Prefixed
     # currencies run first so "$" doesn't eat "NZ$".
     for symbol, word, flags in _CURRENCY_WORDS:
-        text = re.sub(symbol + r"\s*([\d,]*\d(?:\.\d+)?)", r"\1 " + word, text, flags=flags)
+        text = re.sub(symbol + r"\s*([\d,]*\d(?:\.\d+)?)(?:(?-i:(MM|[KMB]))\b)?", lambda m, w=word: (
+            f"{m.group(1)} {_MAGNITUDE_WORDS[m.group(2)] + ' ' if m.group(2) else ''}{w}"), text, flags=flags)
     text = re.sub(r"(?<=\d)\s*%", " percent", text)
     # Operators and separators that commonly leak from formatted answers.
     text = re.sub("[•◦▪▫]", " ", text.replace("&", " and "))  # bullet glyphs
@@ -151,12 +158,14 @@ _HASH_PREFIX_HEX_RE = re.compile(
 _HEX_RUN_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{7,64}(?![0-9a-fA-F])")
 _IDENTIFIER_TOKEN_RE = re.compile(r"[A-Za-z0-9_./~@-]+")
 _DATE_TOKEN_RE = re.compile(r"\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?")
+_RATIO_TOKEN_RE = re.compile(r"\d+(?:/\d+)+")
 
 
 def _is_dense_identifier(token: str) -> bool:
     """True for a machine token a voice would spell out character by character."""
-    if "@" in token or _DATE_TOKEN_RE.fullmatch(token):
-        return False  # email addresses, dates ("2026-09-28", "2026/06/02")
+    token = token.rstrip(".")  # a sentence-final full stop is not part of the token ("COVID-19.")
+    if "@" in token or _DATE_TOKEN_RE.fullmatch(token) or _RATIO_TOKEN_RE.fullmatch(token):
+        return False  # email addresses, dates ("2026-09-28", "2026/06/02"), ratios ("24/7", "1/2")
     if token.startswith(("~/", "./", "../", "/")):
         return True  # filesystem paths
     if "/" in token and (_FILENAME_EXT_RE.search(token) or any(char.isdigit() for char in token)):

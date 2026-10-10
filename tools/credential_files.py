@@ -12,7 +12,6 @@ import os
 import posixpath
 import stat
 import time
-from contextvars import ContextVar
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
@@ -29,8 +28,11 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Session-scoped registry; ContextVar prevents cross-session bleed in the gateway.
-_registered_files_var: ContextVar[dict[str, str]] = ContextVar("_registered_files")
+# Skill-registered files, one map per profile home. Deliberately NOT a ContextVar: each tool call runs
+# in a copy_context() snapshot (tools.thread_context.propagate_context_to_thread), so a map created
+# inside skill_view's worker never reached the terminal call that mounts the files (same as
+# env_passthrough, #90004). Keyed by home so one profile's files never mount into another's sandbox.
+_registered_files: dict[str, dict[str, str]] = {}
 
 # Cache for config-based file list, one entry per profile home (tests reset it).
 _config_files: dict[str, list[dict[str, str]]] = {}
@@ -39,10 +41,8 @@ _safe_skills_tempdir: Path | None = None
 
 
 def _get_registered() -> dict[str, str]:
-    val = _registered_files_var.get(None)
-    if val is None:
-        _registered_files_var.set(val := {})
-    return val
+    from hermes_constants import hermes_home_key
+    return _registered_files.setdefault(hermes_home_key(), {})
 
 
 def _mount(host_path: Path | str, container_path: str) -> dict[str, str]:

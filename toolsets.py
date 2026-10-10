@@ -481,6 +481,7 @@ def validate_toolset(name: str) -> bool:
 def create_custom_toolset(name: str, description: str, tools: list[str] | None = None, includes: list[str] | None = None) -> None:
     """Register a runtime toolset in TOOLSETS."""
     TOOLSETS[name] = _ts(description, tools or [], includes or [])
+    _resolve_toolset_memo.clear()  # the memo key does not see TOOLSETS edits
 
 
 def get_toolset_info(name: str) -> dict[str, Any]:

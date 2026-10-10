@@ -9,6 +9,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from tools.registry import tool_error
+from tools.schema_sanitizer import _SCHEMA_MAP_KEYS
 from tools.tool_search_catalog import BRIDGE_TOOL_NAMES, _registry_entry
 
 logger = logging.getLogger("tools.tool_search")
@@ -23,8 +24,11 @@ def _schema_for_local_validation(node: Any) -> Any:
         return [_schema_for_local_validation(item) for item in node]
     if not isinstance(node, dict):
         return node
-    # Literal keywords hold instance data, not schemas: copy byte-for-byte.
-    normalized = {key: (copy.deepcopy(value) if key in _SCHEMA_LITERAL_KEYS
+    # Literal keywords hold instance data, not schemas: copy byte-for-byte. A schema map's keys
+    # are entry NAMES (a parameter may be called ``nullable`` or ``default``): only its values are schemas.
+    normalized = {key: ({name: _schema_for_local_validation(sub) for name, sub in value.items()}
+                        if key in _SCHEMA_MAP_KEYS and isinstance(value, dict)
+                        else copy.deepcopy(value) if key in _SCHEMA_LITERAL_KEYS
                         else _schema_for_local_validation(value))
                   for key, value in node.items() if key != "nullable"}
     if node.get("nullable") is not True:

@@ -58,22 +58,57 @@ def _rename_property_keys(props: dict, path: str) -> dict[str, str]:
     return renames
 
 
-def unrename_tool_args(params_schema: Any, args: Any) -> Any:
+_COMBINATOR_KEYS = ("anyOf", "oneOf", "allOf")
+_MAX_SCHEMA_VIEW_DEPTH = 8  # local refs may be recursive or cyclic
+
+
+def _schema_views(schema: Any, root: Any, depth: int = 0):
+    """Every schema node describing the same value as *schema*: itself, its local ``$ref``
+    target and its combinator branches — the places the sanitizer renames keys for one value."""
+    if not isinstance(schema, dict) or depth > _MAX_SCHEMA_VIEW_DEPTH:
+        return
+    yield schema
+    ref = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/"):
+        target = root
+        for part in ref[2:].split("/"):
+            target = target.get(part.replace("~1", "/").replace("~0", "~")) if isinstance(target, dict) else None
+        yield from _schema_views(target, root, depth + 1)
+    for key in _COMBINATOR_KEYS:
+        branches = schema.get(key)
+        for branch in branches if isinstance(branches, list) else ():
+            yield from _schema_views(branch, root, depth + 1)
+
+
+def unrename_tool_args(params_schema: Any, args: Any, _root: Any = None) -> Any:
     """Map sanitized keys in model-emitted args back to wire names. ``params_schema`` is the
-    ORIGINAL registry schema; recurses into objects/array items; unknown keys pass through."""
-    props = params_schema.get("properties") if isinstance(params_schema, dict) else None
-    if not isinstance(props, dict) or not isinstance(args, dict):
+    ORIGINAL registry schema; recurses into objects/array items, through local ``$ref`` and
+    combinator branches (the sanitizer renames there too); unknown keys pass through."""
+    if not isinstance(args, dict):
         return args
-    reverse = {v: k for k, v in _rename_property_keys(props, "<unrename>").items()}
+    root = params_schema if _root is None else _root
+    props: dict[str, Any] = {}
+    reverse: dict[str, str] = {}
+    for view in _schema_views(params_schema, root):
+        view_props = view.get("properties")
+        if isinstance(view_props, dict):
+            for orig, renamed in _rename_property_keys(view_props, "<unrename>").items():
+                reverse.setdefault(renamed, orig)
+            for name, sub in view_props.items():
+                props.setdefault(name, sub)
+    if not props:
+        return args
     out = {}
     for key, value in args.items():
-        orig = reverse.get(key, key)
-        sub = props.get(orig) if isinstance(props.get(orig), dict) else {}
-        if isinstance(value, dict) and sub:
-            value = unrename_tool_args(sub, value)
-        elif isinstance(value, list) and isinstance(sub.get("items"), dict):
-            value = [unrename_tool_args(sub["items"], item) if isinstance(item, dict) else item
-                     for item in value]
+        orig = key if key in props else reverse.get(key, key)
+        sub = props.get(orig)
+        if isinstance(value, dict):
+            value = unrename_tool_args(sub, value, root)
+        elif isinstance(value, list):
+            items = next((v["items"] for v in _schema_views(sub, root) if isinstance(v.get("items"), dict)), None)
+            if items is not None:
+                value = [unrename_tool_args(items, item, root) if isinstance(item, dict) else item
+                         for item in value]
         out[orig] = value
     return out
 
@@ -330,12 +365,18 @@ _SCHEMA_MARKERS = frozenset({"type", "anyOf", "oneOf", "allOf"})  # a node with 
 
 
 def _dict_nodes(node: Any):
-    """Pre-order walk over every dict node (yielded before its values, so it may be mutated)."""
+    """Pre-order walk over every dict node (yielded before its values, so it may be mutated).
+    A schema map (``properties``, ``$defs``, ...) maps entry NAMES to schemas: its values are
+    walked, the map itself is never a node — a parameter named ``type`` is not a schema marker."""
     if isinstance(node, dict):
         yield node
-    children = node.values() if isinstance(node, dict) else node if isinstance(node, list) else ()
-    for child in children:
-        yield from _dict_nodes(child)
+        for key, child in list(node.items()):
+            in_map = key in _SCHEMA_MAP_KEYS and isinstance(child, dict)
+            for sub in child.values() if in_map else (child,):
+                yield from _dict_nodes(sub)
+    elif isinstance(node, list):
+        for child in node:
+            yield from _dict_nodes(child)
 
 
 def _reactive_strip(

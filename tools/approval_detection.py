@@ -76,13 +76,18 @@ _WRITE_TARGET_BOUNDARY = r'(?=[\s;&|<>"\']|$)'
 # DANGEROUS_PATTERNS.
 
 # Start-of-command position: start of string, newline, subshell opener ($( or backtick), optionally consuming
-# sudo/env/exec/nohup/setsid/time wrappers. Keeps shutdown/reboot rules from firing on "echo reboot" / "grep
-# 'shutdown' log". Real ;/&/| separators are converted to newlines by the quote-aware _mark_command_starts pass;
-# keeping them here mistakes quoted data (grep '(safe|rm -rf /)') for commands.
+# VAR=VAL assignments, sudo/env/exec/nohup/setsid/time/command/nice wrappers and a directory prefix on the
+# executable (`/sbin/reboot` and `FOO=1 reboot` run the same program as `reboot`). Keeps shutdown/reboot rules
+# from firing on "echo reboot" / "grep 'shutdown' log". Real ;/&/| separators are converted to newlines by the
+# quote-aware _mark_command_starts pass; keeping them here mistakes quoted data (grep '(safe|rm -rf /)') for commands.
+_ENV_ASSIGNMENTS = r'(?:\w+=\S*\s+)*'
 _CMDPOS = (
-    r'(?:^|[\n`]|\$\()' r'\s*'  # start position, optional whitespace
-    r'(?:sudo\s+(?:-[^\s]+\s+)*)?' r'(?:env\s+(?:\w+=\S*\s+)*)?'  # optional sudo with flags, env VAR=VAL pairs
-    r'(?:(?:exec|nohup|setsid|time)\s+)*' r'\s*'  # optional wrapper commands
+    r'(?:^|[\n`]|\$\()' r'\s*' + _ENV_ASSIGNMENTS +  # start position, optional whitespace, VAR=VAL pairs
+    # optional sudo with flags (-u/-g/-h/-p/-C take a value), then env with flags; each may carry VAR=VAL pairs
+    r'(?:(?:/\S*/)?sudo\s+(?:-[^\s]+\s+(?:(?<=-[ughpC]\s)[^-\s]\S*\s+)?)*' + _ENV_ASSIGNMENTS + r')?'
+    r'(?:(?:/\S*/)?env\s+(?:-[^\s]+\s+)*' + _ENV_ASSIGNMENTS + r')?'
+    r'(?:(?:exec|nohup|setsid|time|command|nice)\s+)*' r'\s*'  # optional wrapper commands
+    r'(?:/[^\s"\']*/)?'  # optional directory prefix on the executable itself
 )
 
 
@@ -132,8 +137,10 @@ HARDLINE_PATTERNS = [
     (r':\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:', "fork bomb"),
     # Kill every process on the system — anchor the command-name token so `echo "kill -1 sends SIGHUP to
     # everything"` doesn't trip (#93392).
-    (_CMDPOS + r'kill\s+(-[^\s]+\s+)*-1\b', "kill all processes"),
-    (_CMDPOS + r'(shutdown|reboot|halt|poweroff)\b', "system shutdown/reboot"),
+    # -1 must be the TARGET (last argument): `kill -1 <pid>` is SIGHUP to one process, `kill -s KILL -1` is everyone.
+    (_CMDPOS + r'kill(?:[ \t]+[^\s;&|]+)*[ \t]+-1[ \t]*(?:$|[\n;&|)`])', "kill all processes"),
+    # (?!=): `REBOOT=1 make test` assigns a variable, it does not run reboot.
+    (_CMDPOS + r'(shutdown|reboot|halt|poweroff)\b(?!=)', "system shutdown/reboot"),
     (_CMDPOS + r'init\s+[06]\b', "init 0/6 (shutdown/reboot)"),
     (_CMDPOS + r'systemctl\s+(poweroff|reboot|halt|kexec)\b', "systemctl poweroff/reboot"),
     (_CMDPOS + r'telinit\s+[06]\b', "telinit 0/6 (shutdown/reboot)"),
