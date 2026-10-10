@@ -259,8 +259,8 @@ def dry_run() -> tuple[list[dict], list[dict]]:
     auto, prompt = [], []
     for item, p, age in _live_items(load_tracked(), datetime.now(UTC)):
         cat = item["category"]
-        # Stale cron-output entries and protected dirs are skipped by quick(); omit them here too.
-        if (cat == "cron-output" and guess_category(p) != "cron-output") or _is_protected_dir(p):
+        # Stale re-classified entries and protected dirs are skipped by quick(); omit them here too.
+        if (cat in _STALE_SKIP_NOTE and guess_category(p) != cat) or _is_protected_dir(p):
             continue
         if _is_auto_delete(cat, age):
             auto.append(item)
