@@ -724,15 +724,14 @@ def _set_nested(config, dotted_key: str, value):
         at_leaf = len(remaining) == 1
         if isinstance(current, list):
             part = remaining[0]
-            if at_leaf:
-                current[int(part)] = value
-                return
             try:
+                if at_leaf:
+                    current[int(part)] = value
+                    return
                 current = current[int(part)]
-            except (TypeError, ValueError):
-                raise TypeError(
-                    f"Cannot navigate into list at key {dotted_key!r}: "
-                    f"segment {part!r} is not a numeric index")
+            except (TypeError, ValueError, IndexError):
+                raise ValueError(f"Cannot set {dotted_key!r}: {part!r} is not an existing index of that "
+                                 "list (lists are never grown)") from None
             i += 1
         elif isinstance(current, dict):
             match = _greedy_literal_match(current, remaining)
@@ -1620,60 +1619,6 @@ def _env_ref_snapshot(obj, snapshot=None):
     return snapshot
 
 
-def _items_by_unique_name(items):
-    """Return a name-indexed dict only when all items have unique string names."""
-    if not isinstance(items, list):
-        return None
-    indexed = {}
-    for item in items:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-            return None
-        name = item["name"]
-        if name in indexed:
-            return None
-        indexed[name] = item
-    return indexed
-
-
-def _preserve_env_ref_templates(current, raw, loaded_expanded=None):
-    """Restore raw ``${VAR}`` templates where the value is otherwise unchanged, so persisting a
-    loaded (expanded) config never writes the plaintext secret back to ``config.yaml``."""
-    if isinstance(current, str) and isinstance(raw, str) and _ENV_REF_RE.search(raw):
-        if current in (raw, loaded_expanded) or _expand_env_vars(raw) == current:
-            return raw
-        return current
-
-    if isinstance(current, dict) and isinstance(raw, dict):
-        return {
-            key: _preserve_env_ref_templates(
-                value, raw.get(key),
-                loaded_expanded.get(key) if isinstance(loaded_expanded, dict) else None)
-            for key, value in current.items()}
-
-    if isinstance(current, list) and isinstance(raw, list):
-        # Match named objects (e.g. custom_providers) by name so reordering keeps templates;
-        # with duplicate names fall back to positional matching rather than shadowing an entry.
-        current_by_name = _items_by_unique_name(current)
-        raw_by_name = _items_by_unique_name(raw)
-        loaded_by_name = _items_by_unique_name(loaded_expanded)
-        if current_by_name is not None and raw_by_name is not None:
-            return [
-                _preserve_env_ref_templates(
-                    item, raw_by_name.get(item.get("name")),
-                    loaded_by_name.get(item.get("name")) if loaded_by_name is not None else None)
-                for item in current]
-        return [
-            _preserve_env_ref_templates(
-                item,
-                raw[index] if index < len(raw) else None,
-                loaded_expanded[index]
-                if isinstance(loaded_expanded, list) and index < len(loaded_expanded)
-                else None)
-            for index, item in enumerate(current)]
-
-    return current
-
-
 def _explicit_config_paths(config: dict[str, Any]) -> set[tuple[str, ...]]:
     """Leaf paths explicitly present in a RAW (un-normalized) config, so values injected by
     normalisation are never mistaken for user-set ones. Feeds ``_strip_default_values``."""
@@ -1702,12 +1647,14 @@ def _strip_default_values(
     dropped = object()
 
     def _strip(value: Any, default: Any, path: tuple[str, ...]) -> Any:
-        if path in preserve_keys:
+        # A bare ``section:`` (raw null) loads as the default mapping: that is not an authored value.
+        bare = path in preserve_keys and isinstance(value, dict) and isinstance(default, dict)
+        if path in preserve_keys and not bare:
             return copy.deepcopy(value)
         if isinstance(value, dict) and value:
             default_dict = default if isinstance(default, dict) else {}
             stripped = {k: _strip(v, default_dict.get(k), path + (k,)) for k, v in value.items()}
-            return {k: v for k, v in stripped.items() if v is not dropped} or dropped
+            return {k: v for k, v in stripped.items() if v is not dropped} or (None if bare else dropped)
         return dropped if value == default else copy.deepcopy(value)
 
     stripped = _strip(config, defaults, ())
@@ -1813,7 +1760,7 @@ def _normalize_max_turns_config(config: dict[str, Any]) -> dict[str, Any]:
     """Move legacy root-level ``max_turns`` under ``agent``; the schema default is injected only
     when the user set max_turns somewhere (so save_config can otherwise omit it)."""
     config = dict(config)
-    agent_config = dict(config.get("agent") or {})
+    agent_config = dict(agent) if isinstance(agent := config.get("agent"), dict) else {}  # `agent: 5` is a typo
     if "max_turns" in config and "max_turns" not in agent_config:
         agent_config["max_turns"] = config["max_turns"]
     if agent_config or "agent" in config:  # a sparse save must not grow an `agent: {}` section
@@ -1842,27 +1789,26 @@ def resolve_turn_limit(raw: Any, default: int = TURN_LIMIT_UNLIMITED) -> int:
     # bool is a subclass of int; reject explicitly so True/False don't become 1/0.
     if raw is None or isinstance(raw, bool):
         return default
-    if isinstance(raw, (int, float)):
-        n = int(raw)
-    elif isinstance(raw, str):
+    if isinstance(raw, str):
         s = raw.strip().lower()
         if not s:
             return default
         if s in _UNLIMITED_SPELLINGS:
             return TURN_LIMIT_UNLIMITED
         try:
-            n = int(s)
+            raw = int(s)
         except ValueError:
             try:
-                n = int(float(s))
+                raw = float(s)
             except ValueError:
                 logger.debug("resolve_turn_limit: unparseable value %r → default %d", raw, default)
                 return default
-    else:
-        # Unknown type (list, dict, …) — don't crash the agent over a bad config.
-        logger.debug("resolve_turn_limit: unsupported type %s (%r) → default %d", type(raw).__name__, raw, default)
+    if not isinstance(raw, (int, float)) or raw != raw:
+        # Unknown type (list, dict, …) or NaN — don't crash the agent over a bad config.
+        logger.debug("resolve_turn_limit: unsupported value %s (%r) → default %d", type(raw).__name__, raw, default)
         return default
-    return TURN_LIMIT_UNLIMITED if n <= 0 else n
+    # ±inf (YAML ``.inf``, an overflowing ``1e999``) has no int form; like "inf" and <= 0 it means no cap.
+    return TURN_LIMIT_UNLIMITED if abs(raw) == float("inf") or int(raw) <= 0 else int(raw)
 
 
 def cfg_get(cfg: Optional[dict[str, Any]], *keys: str, default: Any = None) -> Any:
@@ -2344,7 +2290,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> dict[str, Any]:
                 _CONFIG_PARSE_FAILURES.pop(path_key, None)  # the file reads now (a transient error left the record)
 
                 if "max_turns" in user_config:
-                    agent_user_config = dict(user_config.get("agent") or {})
+                    agent_user_config = dict(agent) if isinstance(agent := user_config.get("agent"), dict) else {}
                     if agent_user_config.get("max_turns") is None:
                         agent_user_config["max_turns"] = user_config["max_turns"]
                     user_config["agent"] = agent_user_config
@@ -2483,6 +2429,7 @@ def save_config(
         current_normalized = _canonicalize_config(config)
         normalized = current_normalized
         if _raw_for_paths:
+            from hermes_cli.config_env_templates import _preserve_env_ref_templates
             normalized = _preserve_env_ref_templates(
                 normalized, _canonicalize_config(_raw_for_paths),
                 _LAST_EXPANDED_CONFIG_BY_PATH.get(str(config_path)))
@@ -2775,9 +2722,10 @@ def save_env_value(key: str, value: str):
         lines = _read_env_lines(env_path) if env_path.exists() else []
         serialized_value = _quote_env_value(value)
 
-        idx = next((i for i, line in enumerate(lines) if _env_line_defines_key(line, key)), None)
-        if idx is not None:
-            lines[idx] = f"{key}={serialized_value}\n"
+        hits = [i for i, line in enumerate(lines) if _env_line_defines_key(line, key)]
+        if hits:  # readers honour the LAST assignment: write it there and drop the duplicates it shadowed
+            lines[hits[-1]] = f"{key}={serialized_value}\n"
+            lines = [line for i, line in enumerate(lines) if i not in hits[:-1]]
         else:
             if lines and not lines[-1].endswith("\n"):
                 lines[-1] += "\n"
