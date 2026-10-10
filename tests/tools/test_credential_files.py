@@ -39,9 +39,9 @@ class TestRegisterCredentialFiles:
 
         with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
             missing = register_credential_files([{"path": "token.json"}])
+            mounts = get_credential_file_mounts()  # the registry is per profile home
 
         assert missing == []
-        mounts = get_credential_file_mounts()
         assert len(mounts) == 1
         assert mounts[0]["host_path"] == str(hermes_home / "token.json")
         assert mounts[0]["container_path"] == "/root/.hermes/token.json"
@@ -57,9 +57,9 @@ class TestRegisterCredentialFiles:
             missing = register_credential_files([
                 {"path": "real.json", "name": "wrong.json"},
             ])
+            mounts = get_credential_file_mounts()
 
         assert missing == []
-        mounts = get_credential_file_mounts()
         assert "real.json" in mounts[0]["container_path"]
 
 
