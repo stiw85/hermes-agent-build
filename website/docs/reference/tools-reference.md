@@ -8,7 +8,7 @@ description: "Authoritative reference for Hermes built-in tools, grouped by tool
 
 This page documents Hermes' built-in tools, grouped by toolset. Availability varies by platform, credentials, and enabled toolsets.
 
-**Quick counts (current registry):** ~100 tools — 10 browser tools (core) + 2 CDP-gated browser tools + 5 browser-vault tools + `browser_exec`, 4 file tools, 2 terminal tools (`terminal`, `process_manage`), 11 desktop-GUI tools (`read_terminal`, `close_terminal`, `desktop_preview`, `drive_preview`, `annotate_preview`, `read_window_below`, `focus_pane`, `react_to_message`, `gui_tour`, `show_tip`, `apply_layout` — desktop-app sessions only), 2 web tools, 5 Feishu tools, 5 Yuanbao tools, 14 kanban tools (registered when the kanban dispatcher spawns the agent), 1 project tool (`desktop_project`; desktop/GUI sessions), 2 Discord tools, 3 video tools (`video_generate`, `xai_video_edit`, `xai_video_extend`), and a handful of standalone tools (`memory`, `clarify`, `delegate_task`, `execute_code`, `cronjob_manage`, `session_search`, `skill_view`/`skill_manage`/`skills_list`, `text_to_speech`, `image_generate`, `vision_analyze`, `video_analyze`, `todo_list`, `computer_use`, `x_search`).
+**Quick counts (current registry):** ~100 tools — 10 browser tools (core) + 2 CDP-gated browser tools + 5 browser-vault tools + `browser_exec`, 4 file tools, 2 terminal tools (`terminal`, `process_manage`), 11 desktop-GUI tools (`read_terminal`, `close_terminal`, `desktop_preview`, `drive_preview`, `annotate_preview`, `read_window_below`, `focus_pane`, `react_to_message`, `gui_tour`, `show_tip`, `apply_layout` — desktop-app sessions only), 2 web tools, 5 Feishu tools, 5 Yuanbao tools, 15 kanban tools (registered when the kanban dispatcher spawns the agent), 1 project tool (`desktop_project`; desktop/GUI sessions), 2 Discord tools, 3 video tools (`video_generate`, `xai_video_edit`, `xai_video_extend`), and a handful of standalone tools (`memory`, `clarify`, `delegate_task`, `execute_code`, `cronjob_manage`, `session_search`, `skill_view`/`skill_manage`/`skills_list`, `text_to_speech`, `image_generate`, `vision_analyze`, `video_analyze`, `todo_list`, `computer_use`, `x_search`).
 
 :::tip MCP Tools
 In addition to built-in tools, Hermes can load tools dynamically from MCP servers. MCP tools appear with the prefix `mcp__<server>__` (e.g., `mcp__github__create_issue` for the `github` MCP server). See [MCP Integration](../user-guide/features/mcp.md) for configuration.
@@ -28,6 +28,12 @@ In addition to built-in tools, Hermes can load tools dynamically from MCP server
 | `browser_snapshot` | Get a text-based snapshot of the current page's accessibility tree. Returns interactive elements with ref IDs (like @e1, @e2) for browser_click and browser_type. full=false (default): compact view with interactive elements. full=true: comp… | — |
 | `browser_type` | Type text into an input field identified by its ref ID. Clears the field first, then types the new text. Requires browser_navigate and browser_snapshot to be called first. | — |
 | `browser_vision` | Take a screenshot of the current page so you can inspect it visually. Use this when you need to understand what the page looks like — especially for CAPTCHAs, visual verification challenges, complex layouts, or cases where the text snapshot misses important visual information. On native-vision models the screenshot is attached directly; otherwise falls back to an auxiliary vision mo… | — |
+| `browser_vault_list` | List saved website logins, payment cards and addresses as handles with metadata (local Hermes vault plus detected 1Password / Bitwarden). Secret values are never returned. Call first when a page asks for a password, card or address. | — |
+| `browser_vault_unlock` | Ask the user to unlock a password manager (1Password or Bitwarden) for this session. The master password is typed into a masked prompt owned by the UI and never enters the conversation. | — |
+| `browser_vault_fill` | Fill the current page from a vault handle: a login fills only the password field, a payment item fills card fields after the user confirms, an address item fills the address fields. Refused unless the page origin exactly matches the item's bound origin. | — |
+| `browser_vault_save_login` | On a login form with no saved item for its origin, ask the user through a masked prompt to save the login. Stored encrypted, bound to the page origin, and filled immediately; the agent receives only the handle and identifier. | — |
+| `browser_vault_enter_code` | Enter a one-time / verification / 2FA code after the password: generated from the saved authenticator key when present, otherwise the user is asked in their UI. The code never enters the conversation. | — |
+| `browser_exec` | Drive a real web browser via the Browser Use CLI: `code` runs as full Python with pre-imported browser helpers; stdout comes back in the result. Only registered when the Browser Use CLI drives the browser. | Browser Use CLI mode |
 
 ## `browser` toolset (CDP-gated tools)
 
@@ -91,7 +97,7 @@ token). Other sessions do not see it.
 
 ## `feishu_doc` toolset
 
-Scoped to the Feishu document-comment intelligent-reply handler (`gateway/platforms/feishu_comment.py`). Not exposed on `hermes-cli` or the regular Feishu chat adapter.
+Scoped to the Feishu document-comment intelligent-reply handler (`plugins/platforms/feishu/feishu_comment.py`). Not exposed on `hermes-cli` or the regular Feishu chat adapter.
 
 | Tool | Description | Requires environment |
 |------|-------------|----------------------|
@@ -150,6 +156,7 @@ Registered when the agent is either (a) spawned by the kanban dispatcher (`HERME
 | `kanban_list` | List board tasks with filters. Orchestrator-only; hidden from dispatcher-spawned task workers. | profile with `kanban` toolset |
 | `kanban_complete` | Mark the current task done with a structured handoff payload (results, artifacts, follow-ups). | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_block` | Block the current task on a question for the user — the dispatcher pauses, surfaces the question, and resumes once a human replies. | `HERMES_KANBAN_TASK` or `kanban` toolset |
+| `kanban_schedule` | Park the current task in the `scheduled` state while it waits for time or an external event. Ends the current run and makes the task non-dispatchable until an orchestrator unblocks it; it does not create a timer. | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_request_review` | Hand the implementation to a reviewer with `summary`, optional structured `metadata`, and an optional reviewer profile. Moves the same task to `review`; it is not a block and does not affect block-loop accounting. | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_request_changes` | Reviewer verdict for an actively claimed review run. Closes the review run, reapplies parent gating, and routes the task back to the original implementer without using a block. | `HERMES_KANBAN_TASK` or `kanban` toolset |
 | `kanban_heartbeat` | Send a progress heartbeat during a long-running operation so the dispatcher knows the worker is still alive. | `HERMES_KANBAN_TASK` or `kanban` toolset |
