@@ -363,9 +363,9 @@ CATALOG: list[AutomationBlueprint] = [
             ),
             _TIME("09:00"),
             BlueprintSlot(
-                name="recurrence", type="weekdays", label="Repeat on",
+                name="day", type="enum", label="Which day?",
                 default="monday",
-                options=tuple(WEEKDAY_PRESETS.keys()),
+                options=("monday", "tuesday", "wednesday", "thursday", "friday"),
             ),
             _DELIVER,
         ],
