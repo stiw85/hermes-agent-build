@@ -566,7 +566,7 @@ activity, latest message, or session start — while `--before`/`--after`
 explicitly use session start time. Combine either pair for a window.
 
 Attribute filters: `--source` (platform, exact), `--title` / `--model` /
-`--branch` (case-insensitive substring), `--provider` (billing provider,
+`--branch` (substring, case-insensitive for ASCII letters), `--provider` (billing provider,
 exact), `--end-reason`, `--user`, `--chat-id`, `--chat-type` (exact),
 `--cwd` (path prefix), plus numeric bounds `--min/--max-messages`,
 `--min/--max-tokens` (input+output), `--min/--max-cost` (USD, actual falling

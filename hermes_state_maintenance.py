@@ -22,7 +22,8 @@ _COST_SQL = "COALESCE(s.actual_cost_usd, s.estimated_cost_usd, 0)"
 
 
 def _like(value: str) -> str:
-    return f"%{_escape_like(value.lower())}%"
+    # Not lowercased here: SQLite folds ASCII only, so a Python-folded "привет" never equals "Привет".
+    return f"%{_escape_like(value)}%"
 
 
 def _cwd_prefix_filter(value: str) -> tuple[list[str], list]:

@@ -91,15 +91,19 @@ def _is_cjk(cp: int) -> bool:
     return any(lo <= cp <= hi for lo, hi in _CJK_RANGES)
 
 
+def _unquoted_tokens(raw_query: str) -> list[str]:
+    """Whitespace tokens without phrase quotes: the sanitizer quotes every dotted/hyphenated term, and
+    a quote left glued to a token of a multi-term query would be searched for literally."""
+    return raw_query.replace('"', " ").split()
+
+
 def _non_operator_tokens(raw_query: str) -> list[str]:
-    return [t for t in raw_query.split() if t.upper() not in _FTS_OPERATORS]
+    return [t for t in _unquoted_tokens(raw_query) if t.upper() not in _FTS_OPERATORS]
 
 
 def _quote_fts_tokens(raw_query: str) -> str:
     """Quote each non-operator token (neutralising FTS5 special characters), keeping AND/OR/NOT."""
-    return " ".join(
-        tok if tok.upper() in _FTS_OPERATORS else '"' + tok.replace('"', '""') + '"' for tok in raw_query.split()
-    )
+    return " ".join(tok if tok.upper() in _FTS_OPERATORS else f'"{tok}"' for tok in _unquoted_tokens(raw_query))
 
 
 def _like_params(term: str) -> list[str]:
@@ -826,27 +830,29 @@ class SessionSearchMixin:
         # left-to-right without backtracking); a leftover unmatched quote becomes whitespace.
         _quoted_parts: list = []
 
-        def _hold(m: re.Match[str]) -> str:
-            _quoted_parts.append(m.group(0))
+        def _hold(text: str) -> str:
+            _quoted_parts.append(text)
             return f"\x00Q{len(_quoted_parts) - 1}\x00"
 
-        sanitized = _QUOTED_PHRASE_RE.sub(_hold, query).replace('"', " ")
+        sanitized = _QUOTED_PHRASE_RE.sub(lambda m: _hold(m.group(0)), query).replace('"', " ")
 
         # 2. Strip FTS5-special characters (an unquoted ``TODO: fix`` parses as
         # ``column:term``). ``%`` is only spared for the CJK LIKE fallback.
         sanitized = _FTS5_SPECIAL_RE.sub(" ", sanitized)
         if "%" in sanitized and not SessionSearchMixin._contains_cjk(sanitized):
             sanitized = sanitized.replace("%", " ")
-        # 3. Collapse repeated * and drop leading * (prefix needs a char).
+        # 3. Quote dotted/hyphenated/underscored terms in ONE pass (sequential passes double-quote
+        # ``my-app.config``) and hold them, then drop every ``-``/``.`` that joins nothing: FTS5
+        # rejects those bare (``.env``, ``--force``, a sentence-final ``deploy.``).
+        sanitized = re.sub(r"\b(\w+(?:[._-]\w+)+)\b", lambda m: _hold(f'"{m.group(1)}"'), sanitized)
+        sanitized = re.sub(r"[.\-]", " ", sanitized)
+        # 4. Collapse repeated * and drop leading * (prefix needs a char).
         sanitized = re.sub(r"\*+", "*", sanitized)
         sanitized = re.sub(r"(^|\s)\*", r"\1", sanitized)
-        # 4. Drop dangling boolean operators at start/end (syntax errors).
+        # 5. Drop dangling boolean operators at start/end (syntax errors).
         sanitized = re.sub(r"(?i)^(AND|OR|NOT)\b\s*", "", sanitized.strip())
         sanitized = re.sub(r"(?i)\s+(AND|OR|NOT)\s*$", "", sanitized.strip())
-        # 5. Quote dotted/hyphenated/underscored terms in ONE pass (sequential passes
-        # double-quote ``my-app.config``).
-        sanitized = re.sub(r"\b(\w+(?:[._-]\w+)+)\b", r'"\1"', sanitized)
-        # 6. Restore preserved quoted phrases.
+        # 6. Restore the held phrases and terms.
         for i, quoted in enumerate(_quoted_parts):
             sanitized = sanitized.replace(f"\x00Q{i}\x00", quoted)
         return sanitized.strip()
@@ -1194,8 +1200,9 @@ class SessionSearchMixin:
         missed phrases). cjk-bigram serves every shape except queries wanting rows the
         substring indexes exclude (role='tool', cron/subagent sources) and LONE
         1-char CJK runs (bigrams only exist for runs >=2 — LIKE is broader); then trigram
-        (>=3 CJK chars per token); then a LIKE substring scan with one clause per
-        non-operator token so "广西 OR 桂林 OR 漓江" matches each term."""
+        (>=3 CJK chars per token); then a LIKE substring scan with the same AND/OR/NOT
+        semantics ("广西 OR 桂林 OR 漓江" matches each term, "部署 NOT 失败" excludes one) that
+        relaxes an all-terms miss to any term."""
         raw_query = _strip_cjk_wildcards(query).strip('"').strip()
         match_query = _quote_fts_tokens(raw_query)
         if self._fts_cjk_available and not wants_unindexed_rows and not self._has_lone_cjk_run(raw_query):
@@ -1208,15 +1215,14 @@ class SessionSearchMixin:
             matches = self._match_rows("messages_fts_trigram", match_query, fail_open="Trigram", **route)
             if matches is not None:
                 return matches
-        non_op_tokens = _non_operator_tokens(raw_query) or [raw_query]
-        like_params: list = [p for tok in non_op_tokens for p in _like_params(tok)]
-        like_where = [f"({' OR '.join([_LIKE_ANY_COLUMN_SQL] * len(non_op_tokens))})"]
-        filters = {k: route[k] for k in ("include_inactive", "source_filter", "exclude_sources", "role_filter",
-                                         "after_ts", "before_ts")}
-        _search_filter_clauses(like_where, like_params, **filters)
-        # instr() for the snippet uses the first search token.
-        return self._like_rows(like_where, [non_op_tokens[0], *like_params, route["limit"], route["offset"]],
-                               order_by="ORDER BY m.timestamp DESC", limit_sql="LIMIT ? OFFSET ?")
+        like_query = raw_query.replace('"', " ")
+        like = {k: route[k] for k in ("limit", "offset", "include_inactive", "source_filter", "exclude_sources",
+                                      "role_filter", "after_ts", "before_ts")}
+        matches = self._search_messages_like_fallback(like_query, sort=None, **like)
+        # Same any-term retry the unicode61 route gets on a zero-result miss (explicit OR/NOT stay exact).
+        if not matches and (relaxed := self._or_relaxed_query(like_query)) is not None:
+            matches = self._search_messages_like_fallback(relaxed, sort=None, **like)
+        return matches
 
     def _search_unindexed_gap(self, fts_query: str, limit: int, **filters) -> list[dict[str, Any]]:
         """LIKE-scan ids in (fts_rebuild_progress, fts_rebuild_high_water] — rows the deferred

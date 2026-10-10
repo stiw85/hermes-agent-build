@@ -1387,8 +1387,10 @@ class SessionSessionsMixin:
             # rows; MAX over the chain gives effective_last_active in SQL. Do NOT
             # require child.started_at >= parent.ended_at: races insert the
             # continuation before ended_at is written.
+            # search_query is not lowercased: LIKE already folds ASCII, and a Python-folded needle
+            # could never equal a title SQLite left as "Привет".
             outer_where, id_params = self._chain_search_where(
-                where_sql, (id_query or "").strip().lower(), (search_query or "").strip().lower(),
+                where_sql, (id_query or "").strip().lower(), (search_query or "").strip(),
             )
             query = f"""
                 WITH RECURSIVE chain(root_id, cur_id) AS (
@@ -1536,7 +1538,7 @@ class SessionSessionsMixin:
         chain: list[str] = []
         current = session_id
         with self._read_ctx() as conn:
-            while current and current not in chain and len(chain) < 100:
+            while current and current not in chain and len(chain) < _CHAIN_CAP:
                 chain.append(current)
                 row = conn.execute(
                     "SELECT parent_session_id FROM sessions WHERE id = ?", (current,),
