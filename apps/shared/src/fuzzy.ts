@@ -29,9 +29,16 @@ export interface FuzzyMatch {
 
 const WORD_BOUNDARY = /[-_/.\s]/
 
-/** Length-preserving search fold: lower-case and `[-_.]` → space. */
+/** Length-preserving search fold: lower-case and `[-_.]` → space. A character
+ *  whose lower-case form has a different length (`İ` → `i̇`) keeps its case. */
 export function searchFold(value: string): string {
-  return value.toLowerCase().replace(/[-_.]/g, ' ')
+  return Array.from(value, ch => {
+    const lower = ch.toLowerCase()
+
+    return lower.length === ch.length ? lower : ch
+  })
+    .join('')
+    .replace(/[-_.]/g, ' ')
 }
 
 function isBoundary(target: string, index: number): boolean {

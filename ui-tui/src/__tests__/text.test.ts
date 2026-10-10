@@ -34,6 +34,16 @@ describe('buildToolTrailLine', () => {
   })
 })
 
+describe('parseToolTrailResultLine', () => {
+  it('keeps a call whose preview holds ": " in one piece', () => {
+    const line = buildToolTrailLine('terminal', "git commit -m 'fix: thing'", false, '', 1.2)
+    const parsed = parseToolTrailResultLine(line)
+
+    expect(parsed).toEqual({ call: `Terminal("git commit -m 'fix: thing'") (1.2s)`, detail: '', mark: '✓' })
+    expect(splitToolDuration(parsed!.call).duration).toBe(' (1.2s)')
+  })
+})
+
 describe('buildVerboseToolTrailLine', () => {
   it('preserves multiline args and result details', () => {
     const line = buildVerboseToolTrailLine(

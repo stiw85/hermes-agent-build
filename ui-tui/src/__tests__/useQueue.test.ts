@@ -40,6 +40,14 @@ describe('queue items', () => {
     })
   })
 
+  it('expands the label to a payload holding replacement patterns verbatim', () => {
+    const display = '[[ echo.. [3 lines] .. done ]]'
+    const text = 'echo $$\nIFS=$\'\\n\'\necho "$&" done'
+    const queue = [queueItem(text, display)]
+
+    expect(takeQueueItem(queue, 0, `run ${display}`)?.text).toBe(`run ${text}`)
+  })
+
   it('treats a rewritten collapsed label as literal edited text', () => {
     const queue = [queueItem('full payload', '[[ collapsed ]]')]
 

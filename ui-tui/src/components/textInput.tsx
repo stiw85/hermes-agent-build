@@ -465,7 +465,7 @@ export function resolveCursorLayout(display: string, cur: number, curRefCurrent:
  * what makes "repeat to clear across lines" work.
  */
 export function killToLineStart(value: string, cursor: number): { value: string; cursor: number } {
-  const start = value.lastIndexOf('\n', Math.max(0, cursor - 1)) + 1
+  const start = cursor > 0 ? value.lastIndexOf('\n', cursor - 1) + 1 : 0
   const from = start === cursor && cursor > 0 ? start - 1 : start
 
   return { value: value.slice(0, from) + value.slice(cursor), cursor: from }
