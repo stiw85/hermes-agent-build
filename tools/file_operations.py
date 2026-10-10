@@ -770,6 +770,8 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             "        text = text[1:]\n"
             "    text = text.replace('\\r\\n', '\\n')\n"
             "    lines = text.split('\\n')\n"
+            "    if len(lines) > 1 and lines[-1] == '':\n"
+            "        lines.pop()\n"
             "    total = len(lines)\n"
             "    sel = lines[offset - 1: offset - 1 + limit]\n"
             "    out = {'total_lines': total, 'encoding': enc,\n"
@@ -796,6 +798,8 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             encoding = str(data.get("encoding", "utf-16"))
         except (ValueError, KeyError, TypeError):
             return None
+        if offset > total_lines:
+            return self._past_eof_result(offset, total_lines, file_size)
         end_line = offset + limit - 1
         truncated = total_lines > end_line
         hint_parts = [f"Transcoded from {encoding.upper()} to UTF-8 for display. "
@@ -1006,6 +1010,15 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         return result
 
     @staticmethod
+    def _past_eof_result(offset: int, total_lines: int, file_size: int) -> ReadResult:
+        return ReadResult(
+            content="", total_lines=total_lines, file_size=file_size,
+            hint=(
+                f"Note: offset {offset} is beyond the end of the file "
+                f"({total_lines} lines total). Retry with offset <= "
+                f"{total_lines}."))
+
+    @staticmethod
     def _image_redirect_result(file_size: int) -> ReadResult:
         return ReadResult(
             is_image=True, is_binary=True, file_size=file_size,
@@ -1151,12 +1164,7 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         if file_size == 0:
             return ReadResult(content="", total_lines=0, file_size=0, hint="File is empty (0 bytes).")
         if offset > total_lines > 0:
-            return ReadResult(
-                content="", total_lines=total_lines, file_size=file_size,
-                hint=(
-                    f"Note: offset {offset} is beyond the end of the file "
-                    f"({total_lines} lines total). Retry with offset <= "
-                    f"{total_lines}."))
+            return self._past_eof_result(offset, total_lines, file_size)
         from tools.tool_output_limits import get_max_line_length
         max_line_length = get_max_line_length()
         truncated_lines = any(len(line) > max_line_length for line in read_output.split('\n'))
@@ -1339,7 +1347,11 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             denied = get_write_denied_error(p, verb="Move", entry=True)
             if denied:
                 return WriteResult(error=denied)
-        result = self._exec(f"mv {self._escape_shell_arg(src)} {self._escape_shell_arg(dst)}")
+        # Like write_file, create the destination's parent: a V4A Move validated against
+        # a free path must not fail after earlier operations of the patch have applied.
+        parent = os.path.dirname(dst)
+        mkdir = f"mkdir -p {self._escape_shell_arg(parent)} && " if parent else ""
+        result = self._exec(f"{mkdir}mv {self._escape_shell_arg(src)} {self._escape_shell_arg(dst)}")
         if result.exit_code != 0:
             return WriteResult(error=f"Failed to move {src} -> {dst}: {result.stdout}")
         return WriteResult()
@@ -1618,15 +1630,19 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         raw_content = data.decode("utf-8", "surrogateescape")
         content, _ = _strip_bom(raw_content)
 
+        # Adapt the replacement to the file's ending, never the file to the replacement:
+        # an LF file keeps whatever terminators its untouched lines have.
+        file_ending = _detect_line_ending(content)
+        if file_ending == "\n":
+            new_string = _normalize_line_endings(new_string, file_ending)
         from tools.fuzzy_match import fuzzy_find_and_replace
         new_content, match_count, _strategy, error = fuzzy_find_and_replace(
             content, old_string, new_string, replace_all)
         if error or match_count == 0:
             return self._no_match_result(path, content, old_string, new_string, match_count, error)
-        # Models send bare-LF old/new strings; normalize the substituted region to
-        # the file's ending so CRLF files stay consistent.
-        file_ending = _detect_line_ending(content)
-        if file_ending:
+        # Models send bare-LF old/new strings; upgrade the bare LFs they leave in a
+        # CRLF file so it stays consistent.
+        if file_ending == "\r\n":
             new_content = _normalize_line_endings(new_content, file_ending)
         write_result = self.write_file(path, new_content, pre_content=raw_content)
         if write_result.error:
