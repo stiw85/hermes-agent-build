@@ -35,6 +35,7 @@ sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
 
 from agent.compression_marker import ELISION_MARKER_MAX_LEN, elide
 from agent.i18n import t
+from agent.markdown_tables import split_table_row
 from agent.retry_utils import parse_retry_after_seconds
 from agent.secret_scope import get_secret
 from gateway.config import Platform, PlatformConfig
@@ -181,20 +182,12 @@ def _pad(cell: str, width: int) -> str:
     return cell + " " * max(width - _disp_width(cell), 0)
 
 
-def _split_table_row(line: str) -> list[str]:
-    """Split a ``| a | b | c |`` row into trimmed cells (outer pipes optional)."""
-    s = line.strip()
-    s = s.removeprefix("|")
-    s = s.removesuffix("|")
-    return [c.strip() for c in s.split("|")]
-
-
 def _align_table(rows: list[str]) -> list[str]:
     """Re-emit a markdown table padded to per-column display width. rows[1] is the GFM separator
     (regenerated); short rows are padded to a uniform column count first."""
     if len(rows) < 2:
         return rows
-    parsed = [_split_table_row(r) for r in rows]
+    parsed = [split_table_row(r) for r in rows]
     n_cols = max(len(r) for r in parsed)
     parsed = [r + [""] * (n_cols - len(r)) for r in parsed]
     parsed[1] = ["---"] * n_cols  # placeholder; regenerated below

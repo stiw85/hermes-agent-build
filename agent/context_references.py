@@ -349,7 +349,7 @@ def _read_file_reference(
             return ("".join(pieces) if collect else "") if seen else None
 
         parts, total_chars = [], 0
-        with path.open(encoding="utf-8") as fh:
+        with path.open(encoding="utf-8-sig") as fh:
             for _ in range(max(ref.line_start - 1, 0)):
                 if _next_line(fh, collect=False) is None:
                     break
@@ -590,7 +590,9 @@ def _build_folder_listing(path: Path, cwd: Path, limit: int = 200, display_base:
         shown = f"{path}/"
     lines = [shown]
     entries = _iter_visible_entries(path, cwd, limit=limit)
-    for entry in entries:
+    # Depth-first by path so every entry follows its parent: the indent below is the only
+    # structure the model sees. ``path`` itself is the header, not one of its own children.
+    for entry in sorted((e for e in entries if e != path), key=lambda e: e.relative_to(path).parts):
         indent = "  " * max(len(entry.relative_to(path).parts) - 1, 0)
         lines.append(f"{indent}- {entry.name}/" if entry.is_dir() else f"{indent}- {entry.name} ({_file_metadata(entry)})")
     if len(entries) >= limit:

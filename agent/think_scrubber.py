@@ -32,8 +32,9 @@ class StreamingThinkScrubber:
     """Stateful scrubber for streaming reasoning/thinking blocks.
 
     State: ``_in_block`` (inside an open block; text discarded), ``_buf`` (held-back partial-tag
-    tail), ``_last_emitted_ended_newline`` (True iff the last emission ended with ``\\n`` or nothing
-    was emitted yet — decides whether an open tag at buffer position 0 sits at a block boundary).
+    tail), ``_last_emitted_ended_newline`` (True iff the line emitted so far is whitespace-only: a
+    newline or nothing was emitted, then at most indentation — decides whether an open tag at
+    buffer position 0 sits at a block boundary).
     """
 
     # Literal tags so the hot path does string ops, not regex per feed().
@@ -62,7 +63,10 @@ class StreamingThinkScrubber:
         text = self._strip_orphan_close_tags(text)
         if text:
             out.append(text)
-            self._last_emitted_ended_newline = text.endswith("\n")
+            # Indentation can arrive as its own delta: the line stays a boundary until it holds prose.
+            last_nl = text.rfind("\n")
+            self._last_emitted_ended_newline = (
+                (last_nl != -1 or self._last_emitted_ended_newline) and not text[last_nl + 1:].strip())
 
     def feed(self, text: str) -> str:
         """Feed one delta; return the scrubbed visible portion ("" when it is all reasoning or held back)."""
@@ -90,7 +94,7 @@ class StreamingThinkScrubber:
             # certainly leaked reasoning). Priority 2: unterminated open tag at a block
             # boundary (gated so prose mentioning '<think>' isn't over-stripped). Earliest wins.
             pair = self._find_earliest_closed_pair(buf)
-            open_idx, open_len = self._find_open_at_boundary(buf, out)
+            open_idx, open_len = self._find_open_at_boundary(buf)
             if pair is not None and (open_idx == -1 or pair[0] <= open_idx):
                 self._emit(out, buf[:pair[0]])
                 # Pair tags are exact ``<name>``/``</name>``: inner text sits between them.
@@ -148,23 +152,22 @@ class StreamingThinkScrubber:
                 pairs.append((open_idx, close_idx + len(close_tag)))
         return min(pairs) if pairs else None
 
-    def _find_open_at_boundary(self, buf: str, already_emitted: list[str]) -> tuple[int, int]:
+    def _find_open_at_boundary(self, buf: str) -> tuple[int, int]:
         """Return the earliest block-boundary open-tag (idx, len), or (-1, 0)."""
         buf_lower = buf.lower()
         hits = []
         for tag in self._OPEN_TAGS:
             idx = buf_lower.find(tag)
-            while idx != -1 and not self._is_block_boundary(buf, idx, already_emitted):
+            while idx != -1 and not self._is_block_boundary(buf, idx):
                 idx = buf_lower.find(tag, idx + 1)
             if idx != -1:
                 hits.append((idx, len(tag)))
         return min(hits) if hits else (-1, 0)
 
-    def _is_block_boundary(self, buf: str, idx: int, already_emitted: list[str]) -> bool:
-        """True iff *idx* is a block boundary: position 0 after a newline-terminated (or no) prior emission,
-        or any position whose preceding text on the current line is whitespace-only (when no newline
-        precedes it in *buf*, the prior emission must also have ended with a newline)."""
-        prior_newline = already_emitted[-1].endswith("\n") if already_emitted else self._last_emitted_ended_newline
+    def _is_block_boundary(self, buf: str, idx: int) -> bool:
+        """True iff *idx* is a block boundary: everything before it on its line is whitespace — in *buf*
+        and, when no newline precedes it there, in what earlier emissions put on that line too."""
+        prior_newline = self._last_emitted_ended_newline
         if idx == 0:
             return prior_newline
         preceding = buf[:idx]
