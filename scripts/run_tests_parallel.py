@@ -382,17 +382,12 @@ def _discover_files(roots: list[Path]) -> list[Path]:
                 seen.add(real)
                 out.append(root)
             continue
-        # If the explicit root itself sits inside a skipped dir (e.g.
-        # the user said ``tests/docker``), the user has overridden the
-        # skip for that subtree. Compute the set of skip-parts the user
-        # opted into, and only filter files whose path crosses a
-        # skip-part *outside* that opt-in.
-        root_skip_overrides = {
-            part for part in root.parts if part in _SKIP_PARTS
-        }
-        effective_skips = _SKIP_PARTS - root_skip_overrides
+        # Only components below the root count. A root that itself sits
+        # inside a skipped dir (the user said ``tests/docker``) overrides
+        # the skip for that subtree, and a checkout that lives under a
+        # directory named ``docker`` or ``e2e`` changes nothing.
         for path in root.rglob("test_*.py"):
-            if any(part in effective_skips for part in path.parts):
+            if any(part in _SKIP_PARTS for part in path.relative_to(root).parts):
                 continue
             real = path.resolve()
             if real in seen:
@@ -920,10 +915,11 @@ def _load_durations(repo_root: Path) -> dict[str, float]:
     if not path.is_file():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError) as e:
-        print("[ERROR] Failed to load json durations file! {e}")
+        print(f"[ERROR] Failed to load json durations file! {e}")
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _save_durations(

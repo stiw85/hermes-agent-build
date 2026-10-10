@@ -45,12 +45,15 @@ runs:
         while :; do
           n=$((n + 1))
           echo "::group::attempt $n/$_ATTEMPTS: $_CMD"
-          # Run the command, capturing stdout to a temp file while still
-          # streaming to the log. We redirect first, then tee the file to
-          # stdout — this avoids pipefail + tee exit-code interactions that
-          # can cause the if-branch to be skipped under set -e.
-          if bash -c "$_CMD" > "$_OUTFILE"; then
-            cat "$_OUTFILE"
+          # Run the command, capturing stdout to a temp file, then print the
+          # file — for a failed attempt too, or its diagnostics never reach
+          # the log. Redirect-then-cat rather than tee: this avoids pipefail +
+          # tee exit-code interactions that can cause the if-branch to be
+          # skipped under set -e.
+          rc=0
+          bash -c "$_CMD" > "$_OUTFILE" || rc=$?
+          cat "$_OUTFILE"
+          if [ "$rc" -eq 0 ]; then
             echo "::endgroup::"
             # Preserve newlines in the output via heredoc delimiter.
             {

@@ -76,6 +76,13 @@ function runUnit(unit) {
 
 async function main() {
   const argv = process.argv.slice(2)
+  const flagIdx = argv.indexOf('--concurrency')
+  const requested = flagIdx !== -1 ? Number(argv[flagIdx + 1]) : null
+  // NaN would start zero workers and report "all 0 checks passed".
+  if (Number.isNaN(requested)) {
+    console.error('::error::--concurrency needs a number')
+    process.exit(2)
+  }
   const units = discoverUnits()
 
   if (units.length === 0) {
@@ -90,11 +97,7 @@ async function main() {
     return
   }
 
-  const flagIdx = argv.indexOf('--concurrency')
-  const concurrency = Math.max(
-    1,
-    flagIdx !== -1 ? Number(argv[flagIdx + 1]) : Math.min(units.length, availableParallelism()),
-  )
+  const concurrency = Math.max(1, requested ?? Math.min(units.length, availableParallelism()))
 
   console.log(`running ${units.length} checks, up to ${concurrency} at a time:`)
   for (const u of units) console.log(`  ${u.pkg} :: ${u.script}`)
