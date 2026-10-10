@@ -164,7 +164,7 @@ def make_tool_progress_cb(
             try:
                 from acp_adapter.edit_approval import build_edit_proposal, should_auto_approve_edit
 
-                proposal = build_edit_proposal(name, args)
+                proposal = build_edit_proposal(name, args, session_id)
                 if proposal is not None:
                     policy, cwd = edit_approval_policy_getter()
                     if should_auto_approve_edit(proposal, policy, cwd):

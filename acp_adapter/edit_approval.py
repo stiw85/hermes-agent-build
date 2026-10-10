@@ -30,9 +30,10 @@ class EditProposal:
     old_text: str | None
     new_text: str
     arguments: dict[str, Any]
-    # Every file the edit will actually touch. ``path`` may be a comma-joined
-    # display string for multi-file V4A patches; ``paths`` is the authoritative
-    # set for auto-approve checks. Empty means "``path`` alone".
+    # Every file the edit will actually touch, resolved as the file tools resolve it.
+    # ``path`` is the display string (as the model wrote it; comma-joined for multi-file
+    # V4A patches); ``paths`` is the authoritative set for auto-approve checks. Empty
+    # means "``path`` alone".
     paths: tuple[str, ...] = ()
 
 
@@ -60,12 +61,19 @@ def reset_edit_approval_requester(token: Token) -> None:
     _EDIT_APPROVAL_REQUESTER.reset(token)
 
 
-def _read_text_if_exists(path: str) -> str | None:
-    p = Path(path).expanduser()
-    if p.is_file():
-        return p.read_text(encoding="utf-8-sig", errors="replace")
-    if p.exists():
-        raise OSError(f"Cannot edit non-file path: {path}")
+def _tool_target(path: str, task_id: str | None) -> Path:
+    """Where ``write_file``/``patch`` will land ``path`` for this task: a relative path anchors on
+    the session's workspace root, never on the cwd the editor launched the adapter in."""
+    from tools.file_tools_paths import _resolve_path_for_task
+
+    return Path(_resolve_path_for_task(path, task_id or "default"))
+
+
+def _read_text_if_exists(target: Path) -> str | None:
+    if target.is_file():
+        return target.read_text(encoding="utf-8-sig", errors="replace")
+    if target.exists():
+        raise OSError(f"Cannot edit non-file path: {target}")
     return None
 
 
@@ -76,20 +84,22 @@ def _required_path(arguments: dict[str, Any]) -> str:
     return path
 
 
-def _proposal_for_write_file(arguments: dict[str, Any]) -> EditProposal:
+def _proposal_for_write_file(arguments: dict[str, Any], task_id: str | None) -> EditProposal:
     path = _required_path(arguments)
     content = arguments.get("content")
     if content is None:
         raise ValueError("content required")
-    return EditProposal("write_file", path, _read_text_if_exists(path), str(content), dict(arguments))
+    target = _tool_target(path, task_id)
+    return EditProposal("write_file", path, _read_text_if_exists(target), str(content), dict(arguments), (str(target),))
 
 
-def _proposal_for_patch_replace(arguments: dict[str, Any]) -> EditProposal:
+def _proposal_for_patch_replace(arguments: dict[str, Any], task_id: str | None) -> EditProposal:
     path = _required_path(arguments)
     old_string, new_string = arguments.get("old_string"), arguments.get("new_string")
     if old_string is None or new_string is None:
         raise ValueError("old_string and new_string required")
-    old_text = _read_text_if_exists(path)
+    target = _tool_target(path, task_id)
+    old_text = _read_text_if_exists(target)
     if old_text is None:
         raise ValueError(f"Failed to read file: {path}")
 
@@ -99,7 +109,7 @@ def _proposal_for_patch_replace(arguments: dict[str, Any]) -> EditProposal:
         old_text, str(old_string), str(new_string), bool(arguments.get("replace_all", False)))
     if error or match_count == 0:
         raise ValueError(error or f"Could not find match for old_string in {path}")
-    return EditProposal("patch", path, old_text, new_text, dict(arguments))
+    return EditProposal("patch", path, old_text, new_text, dict(arguments), (str(target),))
 
 
 def _extract_v4a_patch_paths(patch_body: str) -> list[str]:
@@ -109,7 +119,7 @@ def _extract_v4a_patch_paths(patch_body: str) -> list[str]:
     return [p for p in paths if p]
 
 
-def _proposal_for_patch_v4a(arguments: dict[str, Any]) -> EditProposal:
+def _proposal_for_patch_v4a(arguments: dict[str, Any], task_id: str | None) -> EditProposal:
     patch_body = arguments.get("patch")
     if not isinstance(patch_body, str) or not patch_body:
         raise ValueError("patch content required")
@@ -117,12 +127,13 @@ def _proposal_for_patch_v4a(arguments: dict[str, Any]) -> EditProposal:
     if not paths:
         raise ValueError("no file paths found in V4A patch")
     single = len(paths) == 1
+    targets = [_tool_target(p, task_id) for p in paths]
     # ACP only supports a single diff payload: surface the exact V4A patch as new_text so
     # patch-mode calls are permissioned and denied patches cannot mutate.
     return EditProposal(
         "patch", paths[0] if single else ", ".join(paths),
-        _read_text_if_exists(paths[0]) if single else None, patch_body, dict(arguments),
-        tuple(paths),
+        _read_text_if_exists(targets[0]) if single else None, patch_body, dict(arguments),
+        tuple(str(t) for t in targets),
     )
 
 
@@ -133,11 +144,12 @@ _PROPOSAL_BUILDERS = {
 }
 
 
-def build_edit_proposal(tool_name: str, arguments: dict[str, Any]) -> EditProposal | None:
-    """Return an edit proposal for supported file mutation calls."""
+def build_edit_proposal(tool_name: str, arguments: dict[str, Any], task_id: str | None = None) -> EditProposal | None:
+    """Return an edit proposal for supported file mutation calls; ``task_id`` is the tool call's
+    task, so the proposal describes the file that call will write."""
     mode = arguments.get("mode", "replace") if tool_name == "patch" else None
     builder = _PROPOSAL_BUILDERS.get((tool_name, mode))
-    return builder(arguments) if builder else None
+    return builder(arguments, task_id) if builder else None
 
 
 def _is_sensitive_auto_approve_path(path: str) -> bool:
@@ -173,7 +185,7 @@ def _denied(message: str) -> str:
     return json.dumps({"error": message}, ensure_ascii=False)
 
 
-def maybe_require_edit_approval(tool_name: str, arguments: dict[str, Any]) -> str | None:
+def maybe_require_edit_approval(tool_name: str, arguments: dict[str, Any], task_id: str | None = None) -> str | None:
     """Run ACP edit approval if bound.
 
     Returns a JSON tool-error string when the edit must be blocked, otherwise
@@ -182,7 +194,7 @@ def maybe_require_edit_approval(tool_name: str, arguments: dict[str, Any]) -> st
     if requester is None:
         return None
     try:
-        proposal = build_edit_proposal(tool_name, arguments)
+        proposal = build_edit_proposal(tool_name, arguments, task_id)
     except Exception as exc:
         logger.warning("Could not build ACP edit approval proposal for %s: %s", tool_name, exc)
         return _denied(f"Edit approval denied: could not prepare diff ({exc})")

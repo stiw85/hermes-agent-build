@@ -123,9 +123,30 @@ def _session_info(sid: str, cwd: str, model: Any, history_len: int, title: Any, 
             "title": _build_session_title(title, preview, cwd), "updated_at": _format_updated_at(updated_at)}
 
 
+def _flatten_history_text(value: Any) -> str:
+    """Persisted content/reasoning (str, or list of ``{"text"}`` / ``{"type": "text", "content"}``
+    parts) -> one stripped string; whitespace-only collapses to ``""`` ("nothing to emit")."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+                elif item.get("type") == "text" and isinstance(item.get("content"), str):
+                    parts.append(item["content"])
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
+    return ""
+
+
 def _first_user_preview(history: list[dict[str, Any]], default: str) -> str:
-    return next((str(m.get("content") or "").strip() for m in history
-                 if m.get("role") == "user" and str(m.get("content") or "").strip()), default)
+    # Text parts only: an image prompt's content is a parts list carrying the whole data URL.
+    return next((text for m in history
+                 if m.get("role") == "user" and (text := _flatten_history_text(m.get("content")))), default)
 
 
 @dataclass
@@ -144,7 +165,7 @@ class SessionState:
     # a bare is_running check in the slash thread would leave a check-then-act window where
     # a prompt claims the turn mid-mutation.
     command_op: bool = False
-    queued_prompts: list[str] = field(default_factory=list)
+    queued_prompts: list[Any] = field(default_factory=list)  # text, or the prompt blocks when it carried media
     runtime_lock: Any = field(default_factory=threading.Lock)
     current_prompt_text: str = ""
     interrupted_prompt_text: str = ""

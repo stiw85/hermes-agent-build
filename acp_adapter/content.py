@@ -101,15 +101,18 @@ def _path_from_file_uri(uri: str) -> Path | None:
     return Path("/mnt") / drive.lower() / rest
 
 
-def _decode_text_bytes(data: bytes, mime_type: str | None) -> str | None:
-    """Decode resource bytes if they are probably text; return None for binary."""
+def _decode_text_bytes(data: bytes, mime_type: str | None, *, truncated: bool = False) -> str | None:
+    """Decode resource bytes if they are probably text; return None for binary.
+    ``truncated``: ``data`` was cut at the inline cap, so a multibyte character split by the
+    cut is dropped instead of demoting the whole file to latin-1."""
     if b"\x00" in data and not _is_text_resource(mime_type):
         return None
     for encoding in ("utf-8-sig", "utf-8", "latin-1"):
         try:
             return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
+        except UnicodeDecodeError as exc:
+            if truncated and exc.end == len(data):  # everything before the cut decoded cleanly
+                return data[:exc.start].decode(encoding)
     # Binary (ELF/Mach-O/PE), not a shell script: feeding its decoded bytes back into the guard tokenizes
     # machine code into bogus NUL-bearing paths and crashes the scanner (#77703). Mirror
     # lifecycle_guard._read_referenced_script and treat it as nothing to scan.
@@ -179,7 +182,7 @@ def _resource_link_to_parts(block: ResourceContentBlock) -> list[dict[str, Any]]
         size = path.stat().st_size
         with path.open("rb") as fh:
             data = fh.read(min(size, _MAX_ACP_RESOURCE_BYTES))
-        text = _decode_text_bytes(data, mime_type)
+        text = _decode_text_bytes(data, mime_type, truncated=size > _MAX_ACP_RESOURCE_BYTES)
         if text is None:
             return _text_parts(**ident, body=f"[Binary file omitted: {size} bytes, mime={mime_type or 'unknown'}]")
         note = f"truncated to {_MAX_ACP_RESOURCE_BYTES} of {size} bytes" if size > _MAX_ACP_RESOURCE_BYTES else None
@@ -215,7 +218,8 @@ def _embedded_resource_to_parts(block: EmbeddedResourceContentBlock) -> list[dic
                 )
             return _image_parts(uri, _resource_display_name(uri), data, mime_type or "image/png")
 
-        body = _decode_text_bytes(data[:_MAX_ACP_RESOURCE_BYTES], mime_type)
+        body = _decode_text_bytes(
+            data[:_MAX_ACP_RESOURCE_BYTES], mime_type, truncated=len(data) > _MAX_ACP_RESOURCE_BYTES)
         if body is None:
             body = f"[Binary embedded file omitted: {len(data)} bytes, mime={mime_type or 'unknown'}]"
         elif len(data) > _MAX_ACP_RESOURCE_BYTES:
