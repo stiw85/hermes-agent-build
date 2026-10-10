@@ -1200,9 +1200,9 @@ class SessionSearchMixin:
         missed phrases). cjk-bigram serves every shape except queries wanting rows the
         substring indexes exclude (role='tool', cron/subagent sources) and LONE
         1-char CJK runs (bigrams only exist for runs >=2 — LIKE is broader); then trigram
-        (>=3 CJK chars per token); then a LIKE substring scan with the same AND/OR/NOT
-        semantics ("广西 OR 桂林 OR 漓江" matches each term, "部署 NOT 失败" excludes one) that
-        relaxes an all-terms miss to any term."""
+        (>=3 CJK chars per token); then a LIKE substring scan with one clause per
+        non-operator token so "广西 OR 桂林 OR 漓江" matches each term, unless the query
+        spells out AND / NOT ("部署 NOT 失败"), which the scan then honours."""
         raw_query = _strip_cjk_wildcards(query).strip('"').strip()
         match_query = _quote_fts_tokens(raw_query)
         if self._fts_cjk_available and not wants_unindexed_rows and not self._has_lone_cjk_run(raw_query):
@@ -1215,14 +1215,19 @@ class SessionSearchMixin:
             matches = self._match_rows("messages_fts_trigram", match_query, fail_open="Trigram", **route)
             if matches is not None:
                 return matches
-        like_query = raw_query.replace('"', " ")
-        like = {k: route[k] for k in ("limit", "offset", "include_inactive", "source_filter", "exclude_sources",
-                                      "role_filter", "after_ts", "before_ts")}
-        matches = self._search_messages_like_fallback(like_query, sort=None, **like)
-        # Same any-term retry the unicode61 route gets on a zero-result miss (explicit OR/NOT stay exact).
-        if not matches and (relaxed := self._or_relaxed_query(like_query)) is not None:
-            matches = self._search_messages_like_fallback(relaxed, sort=None, **like)
-        return matches
+        filters = {k: route[k] for k in ("include_inactive", "source_filter", "exclude_sources", "role_filter",
+                                         "after_ts", "before_ts")}
+        tokens = _unquoted_tokens(raw_query)
+        if any(tok.upper() in ("AND", "NOT") for tok in tokens):  # an explicit operator is exact, never any-term
+            return self._search_messages_like_fallback(
+                " ".join(tokens), limit=route["limit"], offset=route["offset"], sort=None, **filters)
+        non_op_tokens = _non_operator_tokens(raw_query) or [raw_query]
+        like_params: list = [p for tok in non_op_tokens for p in _like_params(tok)]
+        like_where = [f"({' OR '.join([_LIKE_ANY_COLUMN_SQL] * len(non_op_tokens))})"]
+        _search_filter_clauses(like_where, like_params, **filters)
+        # instr() for the snippet uses the first search token.
+        return self._like_rows(like_where, [non_op_tokens[0], *like_params, route["limit"], route["offset"]],
+                               order_by="ORDER BY m.timestamp DESC", limit_sql="LIMIT ? OFFSET ?")
 
     def _search_unindexed_gap(self, fts_query: str, limit: int, **filters) -> list[dict[str, Any]]:
         """LIKE-scan ids in (fts_rebuild_progress, fts_rebuild_high_water] — rows the deferred

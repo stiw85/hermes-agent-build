@@ -1,4 +1,4 @@
-"""The CJK substring scan honours AND / NOT like every other search route.
+"""The CJK substring scan honours an explicit AND / NOT.
 
 One- and two-character CJK terms (most Chinese words) cannot use the trigram
 index and are answered by a LIKE scan. That scan OR-ed every term, so
@@ -30,10 +30,10 @@ def test_not_excludes_the_negated_term(db):
     assert _hits(db, "部署 NOT 失败") == ["部署 成功"]
 
 
-@pytest.mark.parametrize("query", ["部署 AND 失败", "部署 失败"])
-def test_and_requires_every_term(db, query):
-    assert _hits(db, query) == ["部署 失败"]
+def test_explicit_and_requires_every_term(db):
+    assert _hits(db, "部署 AND 失败") == ["部署 失败"]
 
 
-def test_or_still_matches_any_term(db):
-    assert _hits(db, "部署 OR 失败") == ["测试 失败", "部署 失败", "部署 成功"]
+@pytest.mark.parametrize("query", ["部署 OR 失败", "部署 失败"])
+def test_without_and_or_not_any_term_still_matches(db, query):
+    assert _hits(db, query) == ["测试 失败", "部署 失败", "部署 成功"]
