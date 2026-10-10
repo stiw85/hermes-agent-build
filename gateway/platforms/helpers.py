@@ -122,8 +122,9 @@ def bounded_put(store: MutableMapping[str, Any], key: str, value: Any, cap: int)
 # underscore, code fence markers, inline code, headings. Links and the newline
 # squeeze run after these, in that order (see ``strip_markdown``).
 _STRIP_RULES = (
-    (re.compile(r"\*\*(.+?)\*\*", re.DOTALL), r"\1"),
-    (re.compile(r"\*(.+?)\*", re.DOTALL), r"\1"),
+    (re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*", re.DOTALL), r"\1"),
+    # Flanking guards: "2 * 3 * 4", "2*3*4" and "* item" bullets are literal asterisks.
+    (re.compile(r"(?<![\w*])\*(?![\s*])([^*\n]+?)(?<![\s*])\*(?![\w*])"), r"\1"),
     (re.compile(r"\b__(?![\s_])(.+?)(?<![\s_])__\b", re.DOTALL), r"\1"),
     (re.compile(r"\b_(?![\s_])(.+?)(?<![\s_])_\b", re.DOTALL), r"\1"),
     (re.compile(r"```[a-zA-Z0-9_+-]*\n?"), ""),
@@ -133,6 +134,7 @@ _STRIP_RULES = (
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^\)]+)\)")
 _HTTP_TARGET_RE = re.compile(r"https?://", re.IGNORECASE)
 _NEWLINE_SQUEEZE_RE = re.compile(r"\n{3,}")
+_CODE_RE = re.compile(r"```[a-zA-Z0-9_+-]*\n?(.*?)```\n?|`([^`\n]+)`", re.DOTALL)
 
 
 def _keep_link_target(match: re.Match[str]) -> str:
@@ -155,9 +157,19 @@ def strip_markdown(text: str, *, keep_link_targets: bool = False) -> str:
     ``keep_link_targets`` rewrites ``[label](https://url)`` as ``label\nurl``
     instead of discarding the URL; pass it on platforms that auto-link bare URLs.
     """
+    # Code bodies sit out the rules: "*", "_" and "[x](y)" inside code are literal.
+    code: list[str] = []
+
+    def _stash(match: re.Match[str]) -> str:
+        code.append(match.group(1) if match.group(2) is None else match.group(2))
+        return f"\x00{len(code) - 1}\x00"
+
+    text = _CODE_RE.sub(_stash, text)
     for pattern, repl in _STRIP_RULES:
         text = pattern.sub(repl, text)
     text = _MD_LINK_RE.sub(_keep_link_target if keep_link_targets else r"\1", text)
+    for index, body in enumerate(code):
+        text = text.replace(f"\x00{index}\x00", body)
     return _NEWLINE_SQUEEZE_RE.sub("\n\n", text).strip()
 
 
@@ -313,8 +325,10 @@ def _render_table_block(table_block: list[str]) -> str:
             heading = next((cell for cell in cells if cell), f"Row {index}")
             data_cells = cells
         data_cells = (data_cells + [""] * len(headers))[: len(headers)]
-        bullets = [f"• {header}: {value}" for header, value in zip(headers, data_cells)
-                   if has_row_label_col or value != heading]
+        # Only the cell that became the heading is skipped, not every cell with the same text.
+        heading_at = -1 if has_row_label_col else next((i for i, cell in enumerate(cells) if cell), -1)
+        bullets = [f"• {header}: {value}" for i, (header, value) in enumerate(zip(headers, data_cells))
+                   if i != heading_at]
         rendered_groups.append("\n".join([f"**{heading}**", *bullets]))
     return "\n\n".join(rendered_groups)
 

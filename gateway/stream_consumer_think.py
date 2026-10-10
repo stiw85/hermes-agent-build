@@ -78,8 +78,9 @@ class StreamThinkFilterMixin:
                     self._in_think_block = True
                     buf = buf[best_idx + best_len:]
                 else:
-                    # Hold back a partial open tag at the tail.
-                    held_back = _Scrubber._max_partial_suffix(buf, self._OPEN_THINK_TAGS)
+                    # Hold back a partial tag at the tail; an orphan close split across deltas
+                    # must arrive whole to be stripped below.
+                    held_back = _Scrubber._max_partial_suffix(buf, self._OPEN_THINK_TAGS + self._CLOSE_THINK_TAGS)
                     if held_back:
                         self._append_accumulated(buf[:-held_back])
                         self._think_buffer = buf[-held_back:]
