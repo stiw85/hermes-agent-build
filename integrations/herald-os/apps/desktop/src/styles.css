@@ -1,0 +1,735 @@
+@import 'tailwindcss';
+@import '@xterm/xterm/css/xterm.css';
+
+/*
+ * Herald OS design tokens: deep-blue glass on a living wallpaper.
+ * One source per concern; components reference tokens, never literals.
+ */
+@theme {
+  /* A family chosen in Settings (--user-font-*) goes first; the stacks stay as fallbacks. */
+  --font-sans: var(--user-font-ui, -apple-system), BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: var(--user-font-mono, 'SF Mono'), 'JetBrains Mono', 'Fira Code', Menlo, ui-monospace, monospace;
+
+  /* Base and glass fills. */
+  --color-bg: #050f33;
+  --color-bg-elevated: rgba(8, 26, 84, 0.8);
+  --color-glass: rgba(7, 22, 76, 0.74);
+  --color-glass-2: rgba(18, 46, 122, 0.42);
+  --color-glass-3: rgba(34, 76, 170, 0.5);
+  --color-surface: rgba(8, 24, 78, 0.6);
+  --color-surface-2: rgba(18, 46, 122, 0.42);
+  --color-surface-3: rgba(34, 76, 170, 0.5);
+
+  /* Strokes. */
+  --color-line: rgba(140, 180, 255, 0.26);
+  --color-line-strong: rgba(170, 205, 255, 0.55);
+  --color-hairline: rgba(140, 180, 255, 0.26);
+  --color-hairline-strong: rgba(170, 205, 255, 0.55);
+
+  /* Text. */
+  --color-fg: #f3f7ff;
+  --color-fg-2: rgba(216, 228, 255, 0.84);
+  --color-fg-3: rgba(176, 196, 245, 0.68);
+  --color-fg-4: rgba(146, 170, 228, 0.48);
+
+  /* Fixed white and black for things that stay paper-white in every theme (toggle knobs, logo
+     tiles, document previews); light themes swap Tailwind's white and black for the overlays. */
+  --color-paper: #ffffff;
+  --color-ink: #000000;
+
+  /* Accent and semantics. */
+  --color-accent: #2f7dff;
+  --color-accent-strong: #5296ff;
+  --color-accent-soft: rgba(47, 125, 255, 0.24);
+  --color-accent-fg: #ffffff;
+  --color-ok: #36e6a6;
+  --color-progress: #3ad4ff;
+  --color-warn: #f2c25e;
+  --color-danger: #ff6d6d;
+  --color-info: #7cc4ff;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+
+  --shadow-float: 0 2px 6px rgba(0, 8, 40, 0.35), 0 24px 60px rgba(0, 6, 40, 0.55);
+  --shadow-panel: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 12px 40px rgba(0, 8, 50, 0.45);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 6px 20px rgba(0, 8, 50, 0.3);
+
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --animate-fade-in: fade-in 160ms var(--ease-out);
+  --animate-rise: rise 220ms var(--ease-out);
+  --animate-pulse-soft: pulse-soft 1.6s ease-in-out infinite;
+  --animate-pop: pop 200ms var(--ease-out);
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+:root {
+  color-scheme: dark;
+  --z-wallpaper: 0;
+  --z-windows: 10;
+  --z-dock: 40;
+  --z-menubar: 45;
+  --z-panel: 50;
+  --z-overlay: 60;
+  --z-request: 70;
+  --z-command: 80;
+  --z-boot: 100;
+  --glass-blur: 22px;
+  --menubar-h: 30px;
+  --dock-h: 78px;
+}
+
+/* The previous dark preset stays selectable. */
+:root[data-theme='graphite'] {
+  --color-bg: #07080a;
+  --color-glass: rgba(17, 20, 26, 0.92);
+  --color-glass-2: rgba(23, 27, 34, 0.9);
+  --color-glass-3: rgba(30, 35, 44, 0.95);
+  --color-surface: rgba(17, 20, 26, 0.92);
+  --color-surface-2: rgba(23, 27, 34, 0.9);
+  --color-surface-3: rgba(30, 35, 44, 0.95);
+  --color-line: rgba(255, 255, 255, 0.08);
+  --color-line-strong: rgba(255, 255, 255, 0.16);
+  --color-hairline: rgba(255, 255, 255, 0.08);
+  --color-hairline-strong: rgba(255, 255, 255, 0.16);
+  --color-accent: #e6b84a;
+  --color-accent-strong: #f2c85c;
+  --color-accent-soft: rgba(230, 184, 74, 0.16);
+  --color-accent-fg: #1a1406;
+}
+
+:root[data-accent='ice'] {
+  --color-accent: #4cc2ff;
+  --color-accent-strong: #7ad3ff;
+  --color-accent-soft: rgba(76, 194, 255, 0.22);
+}
+
+:root[data-accent='violet'] {
+  --color-accent: #7c6cff;
+  --color-accent-strong: #978aff;
+  --color-accent-soft: rgba(124, 108, 255, 0.24);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+/*
+ * Panels mode (niri): each surface is its own compositor window. backdrop-filter cannot blur other
+ * windows, so glass fills are near-opaque; the chrome surfaces (menu bar, dock, command overlay) sit
+ * on transparent windows so the wallpaper and neighbours show around them.
+ */
+:root[data-shell-mode='panels'] {
+  --color-glass: rgba(7, 22, 76, 0.94);
+  --color-glass-2: rgba(18, 46, 122, 0.72);
+  --color-glass-3: rgba(34, 76, 170, 0.78);
+  --color-bg-elevated: rgba(8, 26, 84, 0.96);
+  --color-surface: rgba(8, 24, 78, 0.9);
+}
+
+:root[data-shell-mode='panels'][data-surface='menubar'],
+:root[data-shell-mode='panels'][data-surface='menubar'] body,
+:root[data-shell-mode='panels'][data-surface='menubar'] #root,
+:root[data-shell-mode='panels'][data-surface='dock'],
+:root[data-shell-mode='panels'][data-surface='dock'] body,
+:root[data-shell-mode='panels'][data-surface='dock'] #root,
+:root[data-shell-mode='panels'][data-surface='command'],
+:root[data-shell-mode='panels'][data-surface='command'] body,
+:root[data-shell-mode='panels'][data-surface='command'] #root,
+:root[data-shell-mode='panels'][data-surface='panel'],
+:root[data-shell-mode='panels'][data-surface='panel'] body,
+:root[data-shell-mode='panels'][data-surface='panel'] #root {
+  background: transparent;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+.selectable {
+  user-select: text;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar, rgba(170, 200, 255, 0.22)) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar, rgba(170, 200, 255, 0.22));
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 1.5px solid var(--color-accent-strong);
+  outline-offset: 1px;
+  border-radius: var(--radius-xs);
+}
+
+button {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  user-select: text;
+}
+
+/* ---- Glass primitives -------------------------------------------------------------------- */
+
+.glass {
+  background: var(--color-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  box-shadow: var(--shadow-panel);
+  border: 1px solid var(--color-line);
+}
+
+.glass-card {
+  background: var(--color-glass-2);
+  border: 1px solid var(--color-line);
+  box-shadow: var(--shadow-card);
+  transition:
+    background-color 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    transform 140ms var(--ease-out),
+    box-shadow 140ms var(--ease-out);
+}
+
+.glass-card-hover:hover {
+  background: var(--color-glass-3);
+  border-color: var(--color-line-strong);
+}
+
+.glass-card-selected {
+  background: var(--color-glass-3);
+  border-color: var(--color-accent-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 0 1px rgba(82, 150, 255, 0.35),
+    0 10px 30px rgba(0, 8, 50, 0.4);
+}
+
+.glass-input {
+  background: var(--color-input, rgba(6, 18, 60, 0.55));
+  border: 1px solid var(--color-line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.glass-input:focus-within {
+  border-color: var(--color-accent-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 3px rgba(47, 125, 255, 0.22);
+}
+
+.hairline {
+  box-shadow: 0 0 0 1px var(--color-line);
+}
+
+.float {
+  background: var(--color-bg-elevated);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  box-shadow: var(--shadow-float);
+  border: 1px solid var(--color-line-strong);
+}
+
+/* Menus sit over thumbnails and text; keep them almost opaque so their items stay readable. */
+.float.menu-surface {
+  background: color-mix(in srgb, var(--color-bg) 94%, transparent);
+}
+
+.icon-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, var(--tile-from, rgba(60, 120, 255, 0.55)), var(--tile-to, rgba(30, 70, 190, 0.55)));
+  border: 1px solid var(--tile-border, rgba(160, 200, 255, 0.35));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 6px 16px rgba(0, 10, 60, 0.35);
+  color: var(--tile-fg, #eaf2ff);
+}
+
+.text-shadow-soft {
+  text-shadow: 0 1px 12px rgba(0, 10, 60, 0.45);
+}
+
+/* ---- Transcript markdown ----------------------------------------------------------------- */
+
+.prose-hermes {
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+.prose-hermes > * + * {
+  margin-top: 0.6em;
+}
+.prose-hermes p {
+  margin: 0;
+}
+.prose-hermes h1,
+.prose-hermes h2,
+.prose-hermes h3,
+.prose-hermes h4 {
+  font-weight: 600;
+  color: var(--color-fg);
+  margin-top: 1em;
+  line-height: 1.3;
+}
+.prose-hermes h1 {
+  font-size: 1.35em;
+}
+.prose-hermes h2 {
+  font-size: 1.15em;
+}
+.prose-hermes h3 {
+  font-size: 1.05em;
+}
+.prose-hermes ul,
+.prose-hermes ol {
+  padding-left: 1.4em;
+  margin: 0;
+}
+.prose-hermes ul {
+  list-style: disc;
+}
+.prose-hermes ol {
+  list-style: decimal;
+}
+.prose-hermes li + li {
+  margin-top: 0.2em;
+}
+.prose-hermes li::marker {
+  color: var(--color-accent-strong);
+}
+.prose-hermes a {
+  color: var(--color-accent-strong);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent-strong) 40%, transparent);
+}
+.prose-hermes code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: rgba(6, 18, 60, 0.6);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-xs);
+}
+.prose-hermes pre {
+  background: rgba(4, 14, 50, 0.7);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.prose-hermes pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+.prose-hermes blockquote {
+  border-left: 2px solid var(--color-line-strong);
+  padding-left: 0.8em;
+  color: var(--color-fg-2);
+}
+.prose-hermes table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.prose-hermes th,
+.prose-hermes td {
+  padding: 0.35em 0.7em;
+  box-shadow: 0 0 0 1px var(--color-line);
+  text-align: left;
+}
+.prose-hermes th {
+  color: var(--color-fg-2);
+  font-weight: 500;
+}
+.prose-hermes hr {
+  border: 0;
+  height: 1px;
+  background: var(--color-line);
+}
+.prose-hermes input[type='checkbox'] {
+  accent-color: var(--color-accent);
+  margin-right: 0.4em;
+}
+
+/* Markdown on a white document card (artifact pane, mission preview). */
+.prose-light,
+.prose-light h1,
+.prose-light h2,
+.prose-light h3,
+.prose-light h4,
+.prose-light p,
+.prose-light li,
+.prose-light th,
+.prose-light td {
+  color: #0f172a;
+}
+.prose-light li::marker {
+  color: #2f7dff;
+}
+.prose-light a {
+  color: #1d4ed8;
+  text-decoration-color: rgba(29, 78, 216, 0.4);
+}
+.prose-light code {
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+}
+.prose-light pre {
+  background: rgba(15, 23, 42, 0.05);
+  border-color: rgba(15, 23, 42, 0.1);
+  color: #0f172a;
+}
+.prose-light blockquote {
+  border-left-color: rgba(15, 23, 42, 0.2);
+  color: #334155;
+}
+.prose-light th,
+.prose-light td {
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.12);
+}
+.prose-light hr {
+  background: rgba(15, 23, 42, 0.12);
+}
+
+/* Document-style rendering for the artifact pane. */
+.prose-document {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.prose-document h1 {
+  font-size: 1.7em;
+  margin-top: 0;
+}
+.prose-document h2 {
+  font-size: 1.15em;
+  margin-top: 1.4em;
+}
+
+.caret::after {
+  content: '';
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  background: var(--color-accent-strong);
+  animation: var(--animate-pulse-soft);
+}
+
+/* ---- OS action highlight: the item a voice/agent command just touched --------------------- */
+
+.os-highlight {
+  animation: os-highlight 1.6s var(--ease-out) both;
+}
+@keyframes os-highlight {
+  0% {
+    box-shadow: 0 0 0 0 var(--color-accent-strong), 0 0 0 0 rgba(47, 125, 255, 0.35);
+  }
+  25% {
+    box-shadow: 0 0 0 2px var(--color-accent-strong), 0 0 28px 6px rgba(47, 125, 255, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 0 var(--color-accent-strong), 0 0 0 0 rgba(47, 125, 255, 0);
+  }
+}
+
+/* ---- Motion utilities -------------------------------------------------------------------- */
+
+.stagger > * {
+  animation: rise 260ms var(--ease-out) both;
+}
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 30ms; }
+.stagger > *:nth-child(3) { animation-delay: 60ms; }
+.stagger > *:nth-child(4) { animation-delay: 90ms; }
+.stagger > *:nth-child(5) { animation-delay: 120ms; }
+.stagger > *:nth-child(6) { animation-delay: 150ms; }
+.stagger > *:nth-child(7) { animation-delay: 180ms; }
+.stagger > *:nth-child(8) { animation-delay: 210ms; }
+.stagger > *:nth-child(9) { animation-delay: 240ms; }
+.stagger > *:nth-child(n + 10) { animation-delay: 270ms; }
+
+.page-enter {
+  animation: page-in 180ms var(--ease-out) both;
+}
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.window-enter {
+  animation: window-in 200ms var(--ease-out) both;
+}
+@keyframes window-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.window-leave {
+  animation: window-out 160ms var(--ease-out) both;
+}
+@keyframes window-out {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+.window-minimize {
+  animation: window-minimize 240ms var(--ease-out) both;
+}
+@keyframes window-minimize {
+  to {
+    opacity: 0;
+    transform: translateY(40vh) scale(0.2);
+  }
+}
+
+/* Boot screen hands off to the desktop: backdrop dissolves while the card lifts away. */
+.boot-leave {
+  animation: boot-out 440ms var(--ease-out) both;
+}
+@keyframes boot-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.boot-card-leave {
+  animation: boot-card-out 360ms var(--ease-out) both;
+}
+@keyframes boot-card-out {
+  to {
+    opacity: 0;
+    transform: translateY(-16px) scale(0.96);
+  }
+}
+
+/* Dock auto-hide: slides below the edge and eases back up; a touch of overshoot on the way in. */
+.dock-bar {
+  transform: translateY(0);
+  opacity: 1;
+  transition:
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 220ms var(--ease-out);
+  will-change: transform;
+}
+.dock-bar-hidden {
+  transform: translateY(calc(100% + 18px));
+  opacity: 0;
+  transition:
+    transform 260ms cubic-bezier(0.4, 0, 0.6, 1),
+    opacity 180ms ease-in 60ms;
+}
+
+/* Dock icons scale from `--dock-scale` (set per icon from cursor distance); the dock bar itself stays put. */
+.dock-item {
+  --dock-scale: 1;
+  transform: translateY(calc((1 - var(--dock-scale)) * 22px)) scale(var(--dock-scale));
+  transform-origin: bottom center;
+  transition: transform 90ms var(--ease-out);
+  will-change: transform;
+}
+.dock-item.dock-bounce {
+  animation: dock-bounce 420ms var(--ease-out);
+}
+.dock-label {
+  transform: translateX(-50%) translateY(4px);
+  transition:
+    opacity 120ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+.dock-item:hover .dock-label {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.dock-bounce {
+  animation: dock-bounce 420ms var(--ease-out);
+}
+@keyframes dock-bounce {
+  0% { transform: translateY(0); }
+  40% { transform: translateY(-14px); }
+  70% { transform: translateY(0); }
+  85% { transform: translateY(-5px); }
+  100% { transform: translateY(0); }
+}
+
+/* Sidebar: hover labels for the collapsed rail and the resize handle's hairline. */
+.side-tip {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  z-index: 20;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--color-fg);
+  background: rgba(10, 28, 90, 0.92);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 8px 24px rgba(0, 10, 60, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-4px, -50%);
+  transition:
+    opacity 120ms var(--ease-out),
+    transform 120ms var(--ease-out);
+}
+.side-item:hover .side-tip,
+.side-item:focus-visible .side-tip {
+  opacity: 1;
+  transform: translate(0, -50%);
+  transition-delay: 160ms;
+}
+/* Variant for rails on the right edge: the label opens towards the left. */
+.side-tip.side-tip-left {
+  left: auto;
+  right: calc(100% + 10px);
+  transform: translate(4px, -50%);
+}
+.side-item:hover .side-tip.side-tip-left,
+.side-item:focus-visible .side-tip.side-tip-left {
+  transform: translate(0, -50%);
+}
+.side-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 50%;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity 120ms var(--ease-out);
+}
+.side-handle:hover::after {
+  opacity: 0.55;
+  transition-delay: 120ms;
+}
+.side-handle.is-dragging::after {
+  opacity: 0.9;
+}
+
+.shimmer {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.04) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:root[data-reduce-motion='true'] *,
+:root[data-reduce-motion='true'] *::before,
+:root[data-reduce-motion='true'] *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+.xterm {
+  padding: 8px 10px;
+}
+.xterm .xterm-viewport {
+  background: transparent !important;
+}

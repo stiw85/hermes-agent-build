@@ -70,8 +70,10 @@ SKIP_DIRS = {
 }
 # Pruned only directly under the repo root.
 ROOT_SKIP_DIRS = {".github"}
-# Pruned as repo-relative paths.
-SKIP_REL_DIRS = {Path("website/i18n"), Path("website/build"), Path("website/node_modules")}
+# Pruned as repo-relative paths. integrations/ is vendored third-party product code (see integrations/README.md).
+SKIP_REL_DIRS = {
+    Path("website/i18n"), Path("website/build"), Path("website/node_modules"), Path("integrations"),
+}
 
 SKIP_FILE_NAMES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "uv.lock", "poetry.lock"}
 SKIP_FILE_PATTERNS = (

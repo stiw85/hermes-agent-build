@@ -1,0 +1,67 @@
+name: Arch package
+
+# Builds herald-os-bin from a freshly built tarball in an Arch container, lints both PKGBUILDs and the
+# package with namcap, installs it and runs the CLIs. Nothing is published to the AUR from here.
+
+on:
+  push:
+    branches: [main]
+    paths: ['packaging/arch/**', 'linux/**', 'apps/desktop/package.json', '.github/workflows/arch.yml']
+  pull_request:
+    paths: ['packaging/arch/**', 'linux/**', 'apps/desktop/package.json', '.github/workflows/arch.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: herald-os-bin (x86_64)
+    runs-on: ubuntu-24.04
+    # Docker Hub's official image, mirrored on ECR Public: Docker Hub rate-limits the shared runners' anonymous pulls.
+    container: public.ecr.aws/docker/library/archlinux:base-devel
+    steps:
+      - name: Tools and the package's dependencies
+        run: pacman -Syu --noconfirm --needed git nodejs npm python namcap gtk3 nss alsa-lib libsecret libnotify curl wl-clipboard wtype grim slurp
+      - uses: actions/checkout@v7
+      - name: The shared packaging files are the same in both packages
+        run: |
+          cmp packaging/arch/herald-os-bin/herald-os-package.sh packaging/arch/herald-os-git/herald-os-package.sh
+          cmp packaging/arch/herald-os-bin/herald-os.install packaging/arch/herald-os-git/herald-os.install
+      - name: Lint the PKGBUILDs
+        run: namcap packaging/arch/herald-os-bin/PKGBUILD packaging/arch/herald-os-git/PKGBUILD
+      - name: A user to build as (makepkg refuses root)
+        run: useradd -m builder && chown -R builder:builder "$GITHUB_WORKSPACE"
+      - name: Build the tarball
+        run: su builder -c 'cd "$GITHUB_WORKSPACE" && npm run sync-upstream && npm ci && npm run dist:linux --workspace apps/desktop -- --x64'
+      - name: Package it
+        run: |
+          tarball="$(ls "$GITHUB_WORKSPACE"/apps/desktop/release/herald-os-*-linux-x64.tar.gz)"
+          # A fresh tarball, so not the release's checksums.
+          su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch/herald-os-bin' && HERALD_OS_TARBALL_URL='file://$tarball' makepkg --noconfirm --nodeps --skipchecksums"
+          for dir in herald-os-bin herald-os-git; do
+            su builder -c "cd '$GITHUB_WORKSPACE/packaging/arch/$dir' && makepkg --printsrcinfo > .SRCINFO"
+          done
+      - name: Lint, inspect and install the package
+        run: |
+          pkg="$(ls packaging/arch/herald-os-bin/herald-os-bin-*.pkg.tar.zst)"
+          namcap "$pkg"
+          files="$(pacman -Qlp "$pkg")"
+          for path in /opt/herald-os/herald-os /opt/herald-os/resources/app.asar /usr/bin/herald-os /usr/bin/herald-os-app /usr/bin/herald-os-catalog \
+            /usr/bin/herald-os-session /usr/share/wayland-sessions/herald-os.desktop /usr/share/applications/herald-os.desktop /usr/share/herald-os/catalog; do
+            grep -q " $path$" <<<"$files" || { echo "::error::$path is not in the package"; exit 1; }
+          done
+          pacman -U --noconfirm "$pkg"
+          herald-os commands >/dev/null
+          herald-os-catalog list >/dev/null
+          herald-os-catalog pkg manager
+          # The package's /opt/herald-os is the package's: the tarball updater must leave it alone.
+          status="$(herald-os-tarball status || true)"
+          grep -q 'herald-os-bin package' <<<"$status" || { echo "::error::herald-os-tarball does not see the package: $status"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herald-os-arch
+          path: |
+            packaging/arch/herald-os-bin/*.pkg.tar.zst
+            packaging/arch/*/.SRCINFO
+          if-no-files-found: error
