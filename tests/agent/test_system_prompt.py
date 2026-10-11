@@ -516,6 +516,7 @@ def test_build_system_prompt_records_stable_prefix():
 def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
     """Keep workspace guidance intact after the shared context."""
     from agent import system_prompt
+    from agent.prompt_builder import OPERATING_DISCIPLINE_GUIDANCE
 
     agent = _make_agent(
         valid_tool_names=["read_file"],
@@ -541,6 +542,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
     expected = "\n\n".join((
         "IDENTITY",
         "HELP",
+        OPERATING_DISCIPLINE_GUIDANCE,
         "STEER",
         "CODING_STABLE",
         "SYSTEM_MESSAGE",
@@ -569,7 +571,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
         prompt = build_system_prompt(agent, system_message="SYSTEM_MESSAGE")
 
     assert prompt == expected
-    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
+    assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:5])
 
 
 class TestTelegramRichMessagesHint:
