@@ -45,3 +45,37 @@ def test_guidance_still_applies_when_user_has_a_custom_persona():
     parts = _parts(_agent(), soul="You are a terse pirate.")
     assert "terse pirate" in parts["stable"]
     assert OPERATING_DISCIPLINE_GUIDANCE in parts["stable"]
+
+
+def _agent_with_config(agent_cfg):
+    from unittest.mock import MagicMock
+
+    from run_agent import AIAgent
+
+    with (
+        patch("model_tools.get_tool_definitions", return_value=[]),
+        patch("model_tools.check_toolset_requirements", return_value={}),
+        patch("agent.process_bootstrap.OpenAI"),
+        patch("hermes_cli.config.load_config", return_value={"agent": agent_cfg}),
+        patch("hermes_cli.config.load_config_readonly", return_value={"agent": agent_cfg}),
+    ):
+        a = AIAgent(
+            api_key="test-key-1234567890",
+            base_url="https://openrouter.ai/api/v1",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+            enabled_toolsets=[],
+        )
+        a.client = MagicMock()
+        return a
+
+
+def test_config_opt_out_removes_guidance_from_the_prompt():
+    agent = _agent_with_config({"operating_discipline_guidance": False})
+    assert OPERATING_DISCIPLINE_GUIDANCE not in agent._build_system_prompt()
+
+
+def test_guidance_is_on_by_default_in_a_real_agent():
+    agent = _agent_with_config({})
+    assert OPERATING_DISCIPLINE_GUIDANCE in agent._build_system_prompt()
