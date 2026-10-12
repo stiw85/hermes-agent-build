@@ -2,7 +2,7 @@
 
 A lean, self-improving trading agent distilled from [Nous Research's Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-The original Hermes is a general-purpose assistant: about 18,000 files and 247 MB, with chat gateways, desktop apps, browser automation, TTS, a website and 35 locales. This branch keeps only the ideas that matter for trading and rebuilds them as **~3,000 lines of Python with 4 core dependencies**:
+The original Hermes is a general-purpose assistant: about 18,000 files and 247 MB, with chat gateways, desktop apps, browser automation, TTS, a website and 35 locales. This branch keeps only the ideas that matter for trading and rebuilds them as **~3,500 lines of Python with 4 core dependencies**:
 
 | Kept from Hermes | Became |
 |---|---|
