@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
@@ -160,7 +161,7 @@ def _truncate_text(text: str, limit: int = 5000) -> str:
 
 def _fenced_text(text: str, language: str = "") -> str:
     """Return a Markdown fence that cannot be broken by backticks in text."""
-    longest = max((len(run) for run in text.split("`")[1::2]), default=0)
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
     fence = "`" * max(3, longest + 1)
     return f"{fence}{language}\n{text}\n{fence}"
 
@@ -636,10 +637,17 @@ _COMPLETION_FORMATTERS: dict[str, _Formatter] = {
 }
 
 
+_HUNK_HEADER_RE = re.compile(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+_DIFF_LINE_SIDES = {"+": ("new",), "-": ("old",), " ": ("old", "new"), "": ("old", "new")}
+
+
 def _parse_unified_diff_content(diff_text: str) -> list[Any]:
     """Convert unified diff text into ACP diff content blocks (one per ``---``/``+++`` pair)."""
     content: list[Any] = []
     state: dict[str, Any] = {"old": None, "new": None, "old_lines": [], "new_lines": []}
+    # Lines the open hunk still owes per its ``@@`` header: inside a hunk a removed ``-- x``
+    # reads ``--- x`` and is content, not the next file's header.
+    owed = {"old": 0, "new": 0}
 
     def _flush() -> None:
         old_path, new_path = state["old"], state["new"]
@@ -654,20 +662,21 @@ def _parse_unified_diff_content(diff_text: str) -> list[Any]:
         state.update(old=None, new=None, old_lines=[], new_lines=[])
 
     for line in diff_text.splitlines():
-        if line.startswith("--- "):
+        in_hunk = owed["old"] > 0 or owed["new"] > 0
+        if not in_hunk and line.startswith("--- "):
             _flush()
             state["old"] = line[4:].strip()
-        elif line.startswith("+++ "):
+        elif not in_hunk and line.startswith("+++ "):
             state["new"] = line[4:].strip()
-        elif line.startswith("@@") or (state["old"] is None and state["new"] is None):
+        elif line.startswith("@@"):
+            counts = _HUNK_HEADER_RE.match(line)
+            owed = {"old": int(counts[1] or 1), "new": int(counts[2] or 1)} if counts else {"old": 0, "new": 0}
+        elif state["old"] is None and state["new"] is None:
             continue
-        elif line.startswith("+"):
-            state["new_lines"].append(line[1:])
-        elif line.startswith("-"):
-            state["old_lines"].append(line[1:])
-        elif line.startswith(" "):
-            state["old_lines"].append(line[1:])
-            state["new_lines"].append(line[1:])
+        elif line.startswith(("+", "-", " ")) or (in_hunk and not line):  # a bare empty line is empty context
+            for side in _DIFF_LINE_SIDES[line[:1]]:
+                state[f"{side}_lines"].append(line[1:])
+                owed[side] -= 1
     _flush()
     return content
 

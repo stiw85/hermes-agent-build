@@ -265,12 +265,6 @@ export const parseToolTrailResultLine = (line: string) => {
     return { call: body.slice(0, sep), detail: body.slice(sep + 4), mark }
   }
 
-  const legacy = body.indexOf(': ')
-
-  if (legacy > 0) {
-    return { call: body.slice(0, legacy), detail: body.slice(legacy + 2), mark }
-  }
-
   return { call: body, detail: '', mark }
 }
 

@@ -18,6 +18,7 @@ from hermes_cli.timefmt import coerce_epoch
 from hermes_state_ids import new_session_id
 from hermes_state_common import SCHEMA_SQL, _shape_preview, _sql_preview_raw, _sql_session_last_active
 from hermes_state_messages import _parse_tool_calls, _tool_calls_count
+from hermes_state_titles import next_title_in_lineage
 import itertools
 
 # Pre-split logger identity so log filtering/capture is unchanged.
@@ -669,6 +670,11 @@ class SessionPortabilityMixin:
             **{col: self._import_int_or_bounded(raw.get(col), col, 0) for col in _IMPORT_INT_COLS},
         }
         params["auto_archived"] &= params["archived"]  # only the sweep sets it, and only on rows it archives
+        # Titles are unique per store: a restored row never takes a name another session holds (the
+        # canonical Bot Chat's name is its identity), it becomes the next "<title> #N" like a duplicate.
+        params["title"] = title = params["title"] or None
+        if title and conn.execute("SELECT 1 FROM sessions WHERE title = ? LIMIT 1", (title,)).fetchone():
+            params["title"] = next_title_in_lineage(conn, title)
         conn.execute(_IMPORT_SESSION_INSERT_SQL, params)
         def _json_value(value: Any) -> Any:
             return safe_json_loads(value, default=value) if isinstance(value, str) else value

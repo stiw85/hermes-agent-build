@@ -11,6 +11,7 @@ import base64
 import contextlib
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -313,12 +314,26 @@ def _tool_call_id(tool_call: dict[str, Any]) -> str:
     return str(tool_call.get("id") or tool_call.get("call_id") or "")
 
 
+def _finite_json_number(token: str) -> float:
+    """``json.loads`` hook for ``parse_float`` / ``parse_constant``: NaN and ±Infinity (literal, or a
+    float that overflows to them) are not JSON on the wire and httpx refuses to encode the request,
+    so the caller keeps the payload as opaque text."""
+    value = float(token)
+    if not math.isfinite(value):
+        raise ValueError(f"non-finite JSON number: {token}")
+    return value
+
+
+def _loads_wire_safe(text: str) -> Any:
+    return json.loads(text, parse_float=_finite_json_number, parse_constant=_finite_json_number)
+
+
 def _translate_tool_call_to_gemini(tool_call: dict[str, Any], include_ids: bool = False) -> dict[str, Any]:
     fn = tool_call.get("function") or {}
     args_raw = fn.get("arguments", "")
     try:
-        args = json.loads(args_raw) if isinstance(args_raw, str) and args_raw else {}
-    except json.JSONDecodeError:
+        args = _loads_wire_safe(args_raw) if isinstance(args_raw, str) and args_raw else {}
+    except ValueError:
         args = {"_raw": args_raw}
     call: dict[str, Any] = {"name": str(fn.get("name") or ""), "args": args if isinstance(args, dict) else {"_value": args}}
     if include_ids and (call_id := _tool_call_id(tool_call)):
@@ -346,8 +361,8 @@ def _translate_tool_result_to_gemini(
     raw_content = message.get("content")
     content = _coerce_content_to_text(raw_content)
     try:
-        parsed = json.loads(content) if content.strip().startswith(("{", "[")) else None
-    except json.JSONDecodeError:
+        parsed = _loads_wire_safe(content) if content.strip().startswith(("{", "[")) else None
+    except ValueError:
         parsed = None
     # Gemini 3 resolves JSON-Schema ``$ref`` pointers inside a functionResponse.response payload and rejects
     # unknown references with HTTP 400 INVALID_ARGUMENT ("referenced name '#/$defs/...' does not match a

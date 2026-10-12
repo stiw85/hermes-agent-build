@@ -298,13 +298,13 @@ def collect_timings(token: str, repo: str, run_id: str, head_sha: str) -> dict:
 def fmt_dur(seconds: float | None) -> str:
     if seconds is None:
         return "—"
-    if seconds < 60:
+    # Rounded before the split, so 119.6 is "2m" and never "1m60s".
+    if round(seconds, 1) < 60:
         return f"{seconds:.1f}s"
-    m = int(seconds // 60)
-    s = seconds % 60
+    m, s = divmod(round(seconds), 60)
     if s == 0:
         return f"{m}m"
-    return f"{m}m{s:.0f}s"
+    return f"{m}m{s}s"
 
 
 def fmt_delta(current: float | None, baseline: float | None) -> tuple[str, str]:

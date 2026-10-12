@@ -117,7 +117,10 @@ class WebhookRouteProcessor:
         parts = [part for part in field.strip().split(".") if part]
         if not parts:
             return _MISSING
-        context = {"payload": payload.get("payload", payload), "event": event_type, "event_type": event_type, "headers": dict(headers or {})}
+        context = {"payload": payload.get("payload", payload), "event": event_type, "event_type": event_type,
+                   "headers": {str(name).lower(): value for name, value in dict(headers or {}).items()}}
+        if parts[0] == "headers" and len(parts) > 1:  # header names are case-insensitive
+            parts[1] = parts[1].lower()
         value: Any = context[parts.pop(0)] if parts[0] in context else payload
         for part in parts:
             if isinstance(value, dict):

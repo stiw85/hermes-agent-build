@@ -14,11 +14,12 @@ _TABLE_WIDTH = 40
 
 _CODE_BLOCK_RE = re.compile(r"```[a-zA-Z0-9_+-]*\n?(.*?)```", re.DOTALL)
 _HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_INLINE_CODE_RE = re.compile(r"`(.+?)`")
 _INLINE_PATTERNS = [
     (re.compile(r"\*\*(.+?)\*\*", re.DOTALL), "BOLD"),
     (re.compile(r"__(.+?)__", re.DOTALL), "BOLD"),
     (re.compile(r"~~(.+?)~~", re.DOTALL), "STRIKETHROUGH"),
-    (re.compile(r"`(.+?)`"), "MONOSPACE"),
+    (_INLINE_CODE_RE, "MONOSPACE"),
     (re.compile(r"(?<!\*)\*(?!\*| )(.+?)(?<!\*)\*(?!\*)"), "ITALIC"),
     (re.compile(r"(?<!\w)_(?!_)(.+?)(?<!_)_(?!\w)"), "ITALIC")]
 
@@ -73,8 +74,14 @@ def markdown_to_signal(text: str) -> tuple[str, list[str]]:
         inner = match.group(1).rstrip("\n")
         styles.append((match.start(), len(inner), "MONOSPACE"))
         text = text[: match.start()] + inner + text[match.end() :]
+    # Code is verbatim from here on: a "# comment" line is not a heading, "*"/"_" are not markers.
+    code_blocks = [(start, start + length) for start, length, _ in styles]
     new_text, last_end = "", 0
+    removed: list[tuple[int, int]] = []
     for match in _HEADING_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in code_blocks):
+            continue
+        removed.append((match.start(), match.end() - match.start()))
         new_text += text[last_end : match.start()]
         eol = text.find("\n", match.end())
         if eol == -1:
@@ -84,12 +91,20 @@ def markdown_to_signal(text: str) -> tuple[str, list[str]]:
         new_text += heading_text
         last_end = eol
     text = new_text + text[last_end:]
+    # Heading markers stripped before a code block moved it left.
+    styles = [(start - sum(n for pos, n in removed if pos < start), length, style) if style == "MONOSPACE"
+              else (start, length, style) for start, length, style in styles]
+    code_blocks = [(start, start + length) for start, length, style in styles if style == "MONOSPACE"]
+    inline_code = [m.span() for m in _INLINE_CODE_RE.finditer(text)]
     # Inline markers: first pattern to claim a span wins; later overlapping matches are dropped.
     all_matches: list[tuple[int, int, int, int, str]] = []
-    occupied: list[tuple[int, int]] = []
+    occupied: list[tuple[int, int]] = list(code_blocks)
     for pattern, style in _INLINE_PATTERNS:
         for match in pattern.finditer(text):
             ms, me = match.start(), match.end()
+            # A marker that opens or closes inside `inline code` belongs to the code.
+            if pattern is not _INLINE_CODE_RE and any(s < ms < e or s < me - 1 < e for s, e in inline_code):
+                continue
             if not any(ms < oe and me > os for os, oe in occupied):
                 all_matches.append((ms, me, match.start(1), match.end(1), style))
                 occupied.append((ms, me))

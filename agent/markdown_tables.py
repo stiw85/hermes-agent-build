@@ -20,6 +20,7 @@ __all__ = ["is_table_divider", "looks_like_table_row", "realign_markdown_tables"
 
 
 _DIVIDER_CELL_RE = re.compile(r"^\s*:?-{3,}:?\s*$")
+_CELL_SEPARATOR_RE = re.compile(r"(?<!\\)\|")  # GFM: ``\|`` is a literal pipe inside a cell
 _MIN_COL_WIDTH = 3  # matches the divider's minimum dash run.
 
 
@@ -29,8 +30,10 @@ def _disp_width(s: str) -> int:
 
 
 def split_table_row(row: str) -> list[str]:
-    """Split ``| a | b | c |`` into ``["a", "b", "c"]`` with trims."""
-    return [c.strip() for c in row.strip().removeprefix("|").removesuffix("|").split("|")]
+    """Split ``| a | b | c |`` into ``["a", "b", "c"]`` with trims; an escaped ``\\|`` stays
+    in its cell and is returned as the pipe it stands for."""
+    cells = _CELL_SEPARATOR_RE.split(row.strip().removeprefix("|").removesuffix("|"))
+    return [c.strip().replace("\\|", "|") for c in cells]
 
 
 def is_table_divider(row: str) -> bool:
@@ -148,8 +151,10 @@ def _render_vertical(rows: list[list[str]], ncols: int, available_width: int) ->
                 continue
             wrapped = _wrap_to_width(value, max(10, available_width - _disp_width(label) - 2))
             out.append(f"{label}: {wrapped[0]}")
-            # Re-flow continuation text at the wider continuation budget.
-            for cl in _wrap_to_width(" ".join(wrapped[1:]), cont_budget) if len(wrapped) > 1 else ():
+            # Re-flow continuation text at the wider continuation budget, from the value itself:
+            # re-joining the wrapped lines would put spaces inside a hard-broken word (a URL).
+            rest = " ".join(value.split())[len(wrapped[0]):].strip()
+            for cl in _wrap_to_width(rest, cont_budget) if len(wrapped) > 1 else ():
                 if cl.strip():
                     out.append(f"  {cl}")
     return out

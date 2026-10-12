@@ -537,6 +537,29 @@ def _try_cleanup_parent_workspaces(conn: sqlite3.Connection, task_id: str) -> No
         pass  # best-effort
 
 
+@contextlib.contextmanager
+def _purging_attachment_blobs(conn: sqlite3.Connection, task_id: str):
+    """Wrap a task hard-delete: once it has committed, unlink the task's attachment
+    files and its emptied per-task dir. A file whose row survived (refused delete)
+    or that another task's attachment still references is kept, as in
+    :func:`kanban_db.delete_attachment`."""
+    stored_paths = [row["stored_path"] for row in conn.execute(
+        "SELECT DISTINCT stored_path FROM task_attachments WHERE task_id = ?", (task_id,),
+    ).fetchall()]
+    yield
+    for stored in stored_paths:
+        if conn.execute(
+            "SELECT 1 FROM task_attachments WHERE stored_path = ? LIMIT 1", (stored,),
+        ).fetchone():
+            continue
+        blob = Path(stored)
+        with contextlib.suppress(OSError):
+            if blob.is_file():
+                blob.unlink()
+            if blob.parent.name == task_id:
+                blob.parent.rmdir()  # only succeeds once the task's dir is empty
+
+
 def _cleanup_worker_tmux(conn: sqlite3.Connection, task_id: str) -> None:
     """Kill the tmux session associated with a task's assignee, if dead."""
     try:

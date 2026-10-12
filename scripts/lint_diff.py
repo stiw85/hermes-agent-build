@@ -2,14 +2,18 @@
 """Diff ruff + ty diagnostic reports between two git refs.
 
 Produces a Markdown summary suitable for `$GITHUB_STEP_SUMMARY` and for PR
-comments. Compares issues by a stable key (file, rule, line) so line-only
+comments. Compares issues by a stable key (file, rule, message) so line-only
 shifts from unrelated edits are treated as the same issue.
 
 Usage:
     lint_diff.py \\
         --base-ruff base/ruff.json --head-ruff head/ruff.json \\
         --base-ty   base/ty.json   --head-ty   head/ty.json \\
-        [--base-ref origin/main] [--head-ref HEAD]
+        [--base-root /tmp/lint-base] [--base-ref origin/main] [--head-ref HEAD]
+
+``--base-root`` is the directory the base reports were produced in when that is
+not the current one (CI scans the base revision in a separate worktree): ruff
+reports absolute paths, and both sides must name a file the same way.
 
 Any of the four --{base,head}-{ruff,ty} files may be missing or empty; in that
 case the tool treats it as "0 diagnostics" (e.g. if base/main doesn't have the
@@ -22,7 +26,7 @@ import argparse
 import json
 import os
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 
@@ -39,15 +43,15 @@ def _load_json(path: Path | None) -> list[dict]:
     return data
 
 
-def _normalize_ruff(entries: list[dict]) -> list[dict]:
-    """Ruff JSON: {code, filename, location.row, message}."""
+def _normalize_ruff(entries: list[dict], root: Path | None = None) -> list[dict]:
+    """Ruff JSON: {code, filename, location.row, message}; ``root`` is where ruff ran."""
     out: list[dict] = []
     for e in entries:
         code = e.get("code") or "unknown"
-        # ruff emits absolute paths; relativize to repo root if possible
+        # ruff emits absolute paths; relativize to the scanned tree if possible
         filename = e.get("filename", "")
         try:
-            filename = os.path.relpath(filename)
+            filename = os.path.relpath(filename, root)
         except ValueError:
             pass
         line = (e.get("location") or {}).get("row", 0)
@@ -88,20 +92,28 @@ def _key(d: dict) -> tuple[str, str, str]:
     return (d["path"], d["rule"], d["message"])
 
 
+def _by_key(entries: list[dict]) -> dict[tuple[str, str, str], list[dict]]:
+    groups: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    for d in entries:
+        groups[_key(d)].append(d)
+    return groups
+
+
 def _diff(base: list[dict], head: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
-    base_map = {_key(d): d for d in base}
-    head_map = {_key(d): d for d in head}
-    base_keys = set(base_map)
-    head_keys = set(head_map)
-    new_keys = head_keys - base_keys
-    fixed_keys = base_keys - head_keys
-    unchanged_keys = base_keys & head_keys
-    # Return head entries for new (current line numbers), base entries for fixed
-    return (
-        [head_map[k] for k in new_keys],
-        [base_map[k] for k in fixed_keys],
-        [head_map[k] for k in unchanged_keys],
-    )
+    # Counted per key: a file may hold the same rule and message more than once, and one
+    # more occurrence on head is a new issue even though its key already existed on base.
+    base_groups, head_groups = _by_key(base), _by_key(head)
+    new: list[dict] = []
+    fixed: list[dict] = []
+    unchanged: list[dict] = []
+    # Head entries for new and unchanged (current line numbers), base entries for fixed
+    for key, entries in head_groups.items():
+        kept = len(base_groups.get(key, ()))
+        unchanged += entries[:kept]
+        new += entries[kept:]
+    for key, entries in base_groups.items():
+        fixed += entries[len(head_groups.get(key, ())):]
+    return new, fixed, unchanged
 
 
 def _rule_counts(entries: list[dict]) -> list[tuple[str, int]]:
@@ -167,6 +179,7 @@ def main() -> int:
     ap.add_argument("--head-ruff", type=Path, required=True)
     ap.add_argument("--base-ty", type=Path, required=True)
     ap.add_argument("--head-ty", type=Path, required=True)
+    ap.add_argument("--base-root", type=Path, help="Directory the base reports were produced in")
     ap.add_argument("--base-ref", default="base")
     ap.add_argument("--head-ref", default="HEAD")
     ap.add_argument(
@@ -179,7 +192,7 @@ def main() -> int:
     base_ty_raw = _load_json(args.base_ty)
     head_ty_raw = _load_json(args.head_ty)
 
-    base_ruff = _normalize_ruff(base_ruff_raw)
+    base_ruff = _normalize_ruff(base_ruff_raw, args.base_root)
     head_ruff = _normalize_ruff(head_ruff_raw)
     base_ty = _normalize_ty(base_ty_raw)
     head_ty = _normalize_ty(head_ty_raw)

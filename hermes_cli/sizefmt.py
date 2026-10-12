@@ -15,6 +15,6 @@ def format_bytes(n) -> str:
         return f"{int(size)} B"
     for unit in ("KB", "MB", "GB"):
         size /= 1024.0
-        if size < 1024:
+        if round(size, 1) < 1024:  # 1023.96 would print as "1024.0" of this unit
             return f"{size:.1f} {unit}"
     return f"{size / 1024.0:.1f} TB"

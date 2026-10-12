@@ -1147,8 +1147,8 @@ streaming:
 skills:
   # Nudge the agent to create skills after complex tasks.
   # Every N tool-calling iterations, remind the model to consider saving a skill.
-  # Set to 0 to disable.
-  creation_nudge_interval: 15
+  # Set to 0 to disable. Default: 10.
+  creation_nudge_interval: 10
 
   # External skill directories — share skills across tools/agents without
   # copying them into ~/.hermes/skills/.  Each path is expanded (~ and ${VAR})
@@ -1403,8 +1403,7 @@ gateway:
 #   slack:         hermes-slack          (same as telegram)
 #   signal:        hermes-signal         (same as telegram)
 #   qqbot:            hermes-qqbot            (same as telegram)
-#   teams:            hermes-teams            (same as telegram)
-#   google_chat:      hermes-google_chat      (same as telegram)
+# Plugin platforms (teams, google_chat, irc, ...) need no entry here.
 #
 platform_toolsets:
   cli: [hermes-cli]
@@ -1415,8 +1414,6 @@ platform_toolsets:
   signal: [hermes-signal]
   qqbot: [hermes-qqbot]
   yuanbao: [hermes-yuanbao]
-  teams: [hermes-teams]
-  google_chat: [hermes-google_chat]
 
 # =============================================================================
 # Gateway Platform Settings
@@ -1485,42 +1482,39 @@ platform_toolsets:
 # ─────────────────────────────────────────────────────────────────────────────
 # Available toolsets (use these names in platform_toolsets or the toolsets list)
 #
-# Run `hermes chat --list-toolsets` to see all toolsets and their tools.
-# Run `hermes chat --list-tools` to see every individual tool with descriptions.
+# Run `hermes tools list` to see all toolsets and whether each is enabled.
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # INDIVIDUAL TOOLSETS (compose your own):
 #   web          - web_search, web_extract
 #   search       - web_search only (no scraping)
-#   terminal     - terminal, process
-#   file         - read_file, write_file, patch, search
+#   terminal     - terminal, process_manage
+#   file         - read_file, write_file, patch, search_files
 #   browser      - browser_navigate, browser_snapshot, browser_click, browser_type,
 #                  browser_scroll, browser_back, browser_press,
 #                  browser_get_images, browser_vision  (requires BROWSERBASE_API_KEY)
 #   vision       - vision_analyze  (requires OPENROUTER_API_KEY)
 #   image_gen    - image_generate  (requires FAL_KEY)
-#   skills       - skills_list, skill_view
-#   skills_hub   - skill_hub (search/install/manage from online registries — user-driven only)
-#   todo         - todo (in-memory task planning, no deps)
+#   skills       - skills_list, skill_view, skill_manage
+#   todo         - todo_list (in-memory task planning, no deps)
 #   tts          - text_to_speech  (Edge TTS free, or ELEVENLABS/OPENAI/MINIMAX/MISTRAL key)
-#   cronjob      - cronjob (create/list/update/pause/resume/run/remove scheduled tasks)
+#   cronjob      - cronjob_manage (create/list/update/pause/resume/run/remove scheduled tasks)
 #
 # PRESETS (curated bundles):
-#   hermes-cli       - All of the above except send_message
-#   hermes-telegram  - terminal, file, web, vision, image_gen, tts, browser,
-#                      skills, todo, cronjob, send_message
+#   hermes-cli       - All of the above
+#   hermes-telegram  - Same as hermes-cli
 #   hermes-discord   - Same as hermes-telegram
 #   hermes-whatsapp  - Same as hermes-telegram
 #   hermes-slack     - Same as hermes-telegram
 #
 # COMPOSITE:
 #   debugging    - terminal + web + file
-#   safe         - web + vision (no terminal access)
+#   safe         - web + vision + image_gen (no terminal access)
 #   all          - Everything available
 #
 #   web          - Web search and content extraction (web_search, web_extract)
 #   search       - Web search only, no scraping (web_search)
-#   terminal     - Command execution and process management (terminal, process)
+#   terminal     - Command execution and process management (terminal, process_manage)
 #   file         - File operations: read, write, patch, search
 #   browser      - Full browser automation (navigate, click, type, screenshot, etc.)
 #   vision       - Image analysis (vision_analyze)
@@ -1534,7 +1528,7 @@ platform_toolsets:
 #
 # Composite toolsets:
 #   debugging    - terminal + web + file (for troubleshooting)
-#   safe         - web + vision (no terminal access)
+#   safe         - web + vision + image_gen (no terminal access)
 
 # NOTE: The top-level "toolsets" key is deprecated and ignored.
 # Tool configuration is managed per-platform via platform_toolsets above.
@@ -2167,10 +2161,12 @@ updates:
   # Disable passive CLI/banner update checks with `hermes config set updates.check false`.
   # Explicit `hermes update --check` and `hermes update` remain available.
   check: true
-  # Create a full HERMES_HOME zip before every `hermes update`.
-  # Backups land in ~/.hermes/backups/ and can be restored with `hermes import`.
-  # Off by default because large homes can add minutes to every update.
-  pre_update_backup: false
+  # Pre-update safety backup before every `hermes update`:
+  #   quick - snapshot critical state files into ~/.hermes/state-snapshots/ (default)
+  #   full  - quick snapshot plus a HERMES_HOME zip in ~/.hermes/backups/ (restore with
+  #           `hermes import`; large homes can add minutes to every update)
+  #   off   - no backup at all
+  # pre_update_backup: quick
 
   # Number of pre-update backup zips to retain.
   backup_keep: 5

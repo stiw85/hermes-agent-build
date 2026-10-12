@@ -148,6 +148,9 @@ def skills_command(args=None):
         print(color("  No changes.", Colors.DIM))
         return
 
-    save_disabled_skills(config, new_disabled, platform)
+    # The platform view is global ∪ platform; write back only the platform's own entries, or a
+    # later global re-enable would leave the skill disabled here.
+    own = new_disabled - get_disabled_skills(config) if platform else new_disabled
+    save_disabled_skills(config, own, platform)
     enabled_count = len(skills) - len(new_disabled)
     print(color(f"✓ Saved: {enabled_count} enabled, {len(new_disabled)} disabled ({platform_label}).", Colors.GREEN))

@@ -334,7 +334,8 @@ def _decode_env_bytes(raw: bytes) -> str:
 def _parse_env_text(text: str) -> dict[str, str]:
     """Tokenize already-read ``.env`` text. See :func:`load_env_file`."""
     secrets: dict[str, str] = {}
-    for raw_line in text.splitlines():
+    # Not splitlines(): FF/VT/NEL/U+2028 are value data to the writers and to python-dotenv.
+    for raw_line in re.split(r"\r\n|\n|\r", text):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue

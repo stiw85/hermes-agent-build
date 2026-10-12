@@ -308,6 +308,10 @@ def _resolve_git_url(identifier: str) -> tuple[str, Optional[str]]:
                     subdir = "/".join(p for p in parts[4:] if p).strip("/") or None
                 return f"https://github.com/{parts[0]}/{repo}.git", subdir
 
+            # A repo page copied from the address bar (``…/repo?tab=readme-ov-file``): a clone URL has no query.
+            head, sep, frag = identifier.partition("#")
+            identifier = head.partition("?")[0] + sep + frag
+
         # Explicit ``#subdir`` fragment — unambiguous for any scheme.
         if "#" in identifier:
             git_url, _, frag = identifier.partition("#")
@@ -323,7 +327,7 @@ def _resolve_git_url(identifier: str) -> tuple[str, Optional[str]]:
     parts = [p for p in identifier.strip("/").split("/") if p]
     if len(parts) >= 2:
         subdir = "/".join([*parts[2:], *fragment.split("/")]).strip("/")
-        return f"https://github.com/{parts[0]}/{parts[1]}.git", (subdir or None)
+        return f"https://github.com/{parts[0]}/{parts[1].removesuffix('.git')}.git", (subdir or None)
     raise ValueError(
         f"Invalid plugin identifier: '{identifier}'. "
         "Use a Git URL or 'owner/repo' shorthand (optionally with a subdirectory: "
@@ -540,20 +544,17 @@ def ensure_basic_auth_plugin_enabled_in_config(cfg: dict) -> bool:
     return True
 
 
-def _discard_key_and_leaf(names: set, key: str) -> None:
-    """Drop *key* and its bare leaf (``observability/langfuse`` -> ``langfuse``) from *names*, so a
-    stale legacy bare-name entry can't keep vetoing the canonical key."""
-    names.discard(key)
-    names.discard(key.split("/")[-1])
-
-
 def _plugin_aliases(key: str, entries: Optional[list] = None) -> set:
     """Every spelling a config list may hold for *key*: the key, its bare leaf and the manifest name.
     The loader matches BOTH the canonical key (``web/firecrawl``) and the manifest name
     (``web-firecrawl``), so a stale entry under any form vetoes an enable ("explicit disable wins").
+    A leaf that is another plugin's own key (a user's flat ``firecrawl``) is that plugin's entry, not ours.
     Pass *entries* to reuse one :func:`_discover_all_plugins` scan across several keys."""
-    names = {key, key.split("/")[-1]}
-    names.update(e[0] for e in (_discover_all_plugins() if entries is None else entries) if e[5] == key)
+    entries = _discover_all_plugins() if entries is None else entries
+    names = {key} | {e[0] for e in entries if e[5] == key}
+    leaf = key.split("/")[-1]
+    if not any(e[5] == leaf for e in entries if e[5] != key):
+        names.add(leaf)
     return names
 
 
@@ -633,9 +634,9 @@ def _set_plugin_enabled(name: str, *, enable: bool, aliases=(), console=None) ->
 
 
 def _apply_activation(enabled: set, disabled: set, key: str, aliases, *, enable: bool) -> None:
-    """Add canonical *key* to the target list and purge it, its bare leaf and *aliases* from the other."""
+    """Add canonical *key* to the target list and purge it and *aliases* from the other."""
     removed = disabled if enable else enabled
-    _discard_key_and_leaf(removed, key)
+    removed.discard(key)
     removed.difference_update(aliases)
     (enabled if enable else disabled).add(key)
 
@@ -779,7 +780,8 @@ def _read_manifest_info(d: Path, prefix: str):
             manifest = {}
         if not isinstance(manifest, dict):
             manifest = {}
-        name = manifest.get("name", d.name)
+        from hermes_cli.plugins_manifest import declared_name
+        name = declared_name(manifest, d)
     key = f"{prefix}/{d.name}" if prefix else name
     return name, manifest.get("version", ""), manifest.get("description", ""), key
 

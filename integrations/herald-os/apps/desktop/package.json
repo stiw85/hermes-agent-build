@@ -1,0 +1,272 @@
+{
+  "name": "@herald-os/desktop",
+  "productName": "Herald OS",
+  "version": "0.1.0-alpha.3",
+  "private": true,
+  "description": "The Herald OS shell: menu bar, dock, windows and apps for an agent-native operating system.",
+  "author": "Luke The Dev",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/electron/main.mjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n renderer,electron -c cyan,yellow \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5180 --strictPort",
+    "dev:electron": "wait-on http://127.0.0.1:5180 && node scripts/bundle-electron.mjs --dev && cross-env HERALD_OS_DEV_SERVER=http://127.0.0.1:5180 electron .",
+    "build": "vite build && node scripts/bundle-electron.mjs",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "test": "vitest run",
+    "dist:mac": "npm run build && electron-builder --mac --arm64 -c.npmRebuild=false --publish never",
+    "dist:linux": "npm run build && electron-builder --linux --publish never"
+  },
+  "dependencies": {
+    "@floating-ui/dom": "1.8.0",
+    "@herald-os/client": "*",
+    "@nanostores/react": "1.1.0",
+    "@tabler/icons-react": "3.46.0",
+    "@tiptap/core": "3.31.4",
+    "@tiptap/extension-bold": "3.31.4",
+    "@tiptap/extension-code": "3.31.4",
+    "@tiptap/extension-document": "3.31.4",
+    "@tiptap/extension-hard-break": "3.31.4",
+    "@tiptap/extension-highlight": "3.31.4",
+    "@tiptap/extension-image": "3.31.4",
+    "@tiptap/extension-italic": "3.31.4",
+    "@tiptap/extension-list": "3.31.4",
+    "@tiptap/extension-paragraph": "3.31.4",
+    "@tiptap/extension-strike": "3.31.4",
+    "@tiptap/extension-subscript": "3.31.4",
+    "@tiptap/extension-superscript": "3.31.4",
+    "@tiptap/extension-table": "3.31.4",
+    "@tiptap/extension-text": "3.31.4",
+    "@tiptap/extension-text-align": "3.31.4",
+    "@tiptap/extension-text-style": "3.31.4",
+    "@tiptap/extension-underline": "3.31.4",
+    "@tiptap/extensions": "3.31.4",
+    "@tiptap/pm": "3.31.4",
+    "@tiptap/react": "3.31.4",
+    "@tiptap/starter-kit": "3.31.4",
+    "@tiptap/suggestion": "3.31.4",
+    "@univerjs/core": "1.0.3",
+    "@univerjs/data-validation": "1.0.3",
+    "@univerjs/design": "1.0.3",
+    "@univerjs/docs": "1.0.3",
+    "@univerjs/docs-drawing": "1.0.3",
+    "@univerjs/docs-ui": "1.0.3",
+    "@univerjs/drawing": "1.0.3",
+    "@univerjs/drawing-ui": "1.0.3",
+    "@univerjs/engine-formula": "1.0.3",
+    "@univerjs/engine-render": "1.0.3",
+    "@univerjs/find-replace": "1.0.3",
+    "@univerjs/rpc": "1.0.3",
+    "@univerjs/sheets": "1.0.3",
+    "@univerjs/sheets-conditional-formatting": "1.0.3",
+    "@univerjs/sheets-conditional-formatting-ui": "1.0.3",
+    "@univerjs/sheets-data-validation": "1.0.3",
+    "@univerjs/sheets-data-validation-ui": "1.0.3",
+    "@univerjs/sheets-drawing": "1.0.3",
+    "@univerjs/sheets-drawing-ui": "1.0.3",
+    "@univerjs/sheets-filter": "1.0.3",
+    "@univerjs/sheets-filter-ui": "1.0.3",
+    "@univerjs/sheets-find-replace": "1.0.3",
+    "@univerjs/sheets-formula": "1.0.3",
+    "@univerjs/sheets-formula-ui": "1.0.3",
+    "@univerjs/sheets-hyper-link": "1.0.3",
+    "@univerjs/sheets-hyper-link-ui": "1.0.3",
+    "@univerjs/sheets-note": "1.0.3",
+    "@univerjs/sheets-note-ui": "1.0.3",
+    "@univerjs/sheets-numfmt": "1.0.3",
+    "@univerjs/sheets-numfmt-ui": "1.0.3",
+    "@univerjs/sheets-sort": "1.0.3",
+    "@univerjs/sheets-sort-ui": "1.0.3",
+    "@univerjs/sheets-thread-comment": "1.0.3",
+    "@univerjs/sheets-thread-comment-ui": "1.0.3",
+    "@univerjs/sheets-ui": "1.0.3",
+    "@univerjs/themes": "1.0.3",
+    "@univerjs/thread-comment": "1.0.3",
+    "@univerjs/thread-comment-ui": "1.0.3",
+    "@univerjs/ui": "1.0.3",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-webgl": "0.19.0",
+    "@xterm/xterm": "6.0.0",
+    "ag-psd": "31.0.2",
+    "clsx": "2.1.1",
+    "cmdk": "1.1.1",
+    "dbus-next": "0.10.2",
+    "docx": "9.9.0",
+    "echarts": "6.1.0",
+    "exceljs": "4.4.0",
+    "jszip": "3.10.2",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm": "3.1.0",
+    "mdast-util-to-markdown": "2.1.2",
+    "micromark-extension-gfm": "3.0.0",
+    "nanostores": "1.4.2",
+    "node-pty": "1.1.0",
+    "onnxruntime-web": "1.30.0",
+    "pptxgenjs": "4.0.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "rxjs": "7.8.2",
+    "shiki": "4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/mdast": "4.0.4",
+    "@types/node": "22.20.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "concurrently": "10.0.5",
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "tailwindcss": "4.3.3",
+    "typescript": "6.0.3",
+    "vite": "8.3.0",
+    "vitest": "5.0.1",
+    "wait-on": "9.1.0"
+  },
+  "build": {
+    "appId": "dev.iamluke.heraldos",
+    "productName": "Herald OS",
+    "executableName": "Herald OS",
+    "artifactName": "HeraldOS-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json",
+      "!**/node_modules/usocket/**",
+      "!**/node_modules/@univerjs/**",
+      "!**/node_modules/@grpc/**",
+      "!**/node_modules/rxjs/**",
+      "!**/node_modules/lodash-es/**",
+      "!**/node_modules/@tiptap/**",
+      "!**/node_modules/prosemirror-*/**",
+      "!**/node_modules/{orderedmap,rope-sequence,w3c-keyname,linkifyjs,fast-equals}/**",
+      "!**/node_modules/@floating-ui/**",
+      "!**/node_modules/{mdast-util-*,micromark*}/**",
+      "!**/node_modules/{exceljs,@fast-csv,fast-csv,archiver,archiver-utils,unzipper,dayjs,saxes,xmlchars,async,bluebird}/**",
+      "!**/node_modules/{docx,xml-js,xml,hash.js}/**",
+      "!**/node_modules/{pptxgenjs,image-size,queue}/**",
+      "!**/node_modules/{jszip,lie,setimmediate}/**",
+      "!**/node_modules/{echarts,zrender}/**",
+      "!**/node_modules/{onnxruntime-web,onnxruntime-common}/**",
+      "!**/node_modules/@tabler/**",
+      "!**/node_modules/ag-psd/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../../LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "../../NOTICE",
+        "to": "NOTICE"
+      },
+      {
+        "from": "build/licenses",
+        "to": "licenses"
+      },
+      {
+        "from": "../../linux/themes",
+        "to": "themes"
+      },
+      {
+        "from": "../../linux/catalog",
+        "to": "catalog"
+      }
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node",
+      "**/node-pty/prebuilds/**"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extraResources": [
+        {
+          "from": "../../plugins/herald-os-bridge",
+          "to": "herald-os-bridge",
+          "filter": [
+            "**/*",
+            "!tests/**",
+            "!**/__pycache__/**",
+            "!.pytest_cache/**"
+          ]
+        }
+      ],
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "Herald OS controls applications on your behalf when you ask it to.",
+        "NSMicrophoneUsageDescription": "Herald OS uses the microphone for voice input.",
+        "NSCameraUsageDescription": "Herald OS shows your camera in a bubble while you record the screen, when you turn it on.",
+        "NSCalendarsFullAccessUsageDescription": "Herald OS shows today's events on the Overview, and gives their titles and times to Hermes when you turn on Pick up where you left off.",
+        "NSCalendarsUsageDescription": "Herald OS shows today's events on the Overview, and gives their titles and times to Hermes when you turn on Pick up where you left off."
+      }
+    },
+    "dmg": {
+      "sign": false
+    },
+    "linux": {
+      "category": "System",
+      "icon": "build/icon.png",
+      "executableName": "herald-os",
+      "artifactName": "herald-os-${version}-linux-${arch}.${ext}",
+      "target": [
+        "tar.gz"
+      ],
+      "extraResources": [
+        {
+          "from": "../../linux",
+          "to": "herald-os-linux",
+          "filter": [
+            "bin/**",
+            "session/**",
+            "niri/**",
+            "omakase/**",
+            "migrations/**",
+            "plymouth/**",
+            "!**/__pycache__/**"
+          ]
+        },
+        {
+          "from": "build/icon.png",
+          "to": "icons/herald-os.png"
+        },
+        {
+          "from": "../../plugins/herald-os-bridge",
+          "to": "herald-os-bridge",
+          "filter": [
+            "**/*",
+            "!tests/**",
+            "!**/__pycache__/**",
+            "!.pytest_cache/**"
+          ]
+        }
+      ],
+      "desktop": {
+        "entry": {
+          "Name": "Herald OS",
+          "Comment": "Agent-native desktop powered by Hermes Agent",
+          "Categories": "System;"
+        }
+      }
+    }
+  }
+}

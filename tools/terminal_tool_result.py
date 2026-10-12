@@ -106,7 +106,9 @@ def _interpret_exit_code(command: str, exit_code: int) -> str | None:
         return signal_note
     # The last command of a pipeline/chain determines the exit code; base
     # command = its first word that isn't a VAR=val assignment, basename'd.
-    segments = re.split(r'\s*(?:\|\||&&|[|;])\s*', command)
+    # Quoted spans are blanked first: `grep -E "a|b" f` is one command, not a pipeline ending in `b" f`.
+    unquoted = re.sub(r'\'[^\']*\'|"(?:[^"\\]|\\.)*"', "''", command)
+    segments = [seg for seg in re.split(r'\s*(?:\|\||&&|[|;])\s*', unquoted) if seg.strip()]
     last_segment = (segments[-1] if segments else command).strip()
     base_cmd = next((w.split("/")[-1] for w in last_segment.split()
                      if "=" not in w or w.startswith("-")), "")

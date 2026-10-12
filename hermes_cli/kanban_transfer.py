@@ -46,8 +46,9 @@ ARCHIVE_FORMAT_VERSION = 1
 # Statuses from which the dispatcher can still act on a task. A task whose
 # workspace cannot be rebuilt on this machine is parked in ``triage`` only
 # if it is in one of these — terminal and already-parked tasks are left
-# alone rather than having their history rewritten.
-_DISPATCHABLE_STATUSES = ("ready", "running", "todo", "scheduled")
+# alone rather than having their history rewritten. ``blocked`` is judged per
+# task in ``_relocate_imported_rows``: only a breaker-parked card resumes itself.
+_DISPATCHABLE_STATUSES = ("ready", "running", "todo", "scheduled", "review")
 _COUNTED_TABLES = ("tasks", "task_links", "task_comments", "task_events", "task_runs", "task_attachments")
 
 
@@ -234,7 +235,8 @@ def _relocate_imported_rows(conn: sqlite3.Connection, slug: str) -> tuple[dict[s
       did not travel (``--no-attachments``) are dropped, since a dangling row
       breaks download in every UI.
     * Workspace paths are cleared. ``scratch`` regenerates on next claim;
-      dispatchable ``dir``/``worktree`` tasks are parked in ``triage``,
+      dispatchable ``dir``/``worktree`` tasks (review lane and breaker-parked
+      ``blocked`` cards included) are parked in ``triage``,
       otherwise the dispatcher claims them, fails to build a workspace, and
       burns them into the failure breaker.
     * Runtime state is scrubbed again (untrusted input, one UPDATE).
@@ -258,13 +260,16 @@ def _relocate_imported_rows(conn: sqlite3.Connection, slug: str) -> tuple[dict[s
         if dropped:
             warnings.append(f"{dropped} attachment record(s) dropped — the files were not in the archive")
 
+        # The scrub zeroed the failure counter, so ``recompute_ready`` resumes every
+        # ``blocked`` card that is not held for an operator.
         parked = [
             r["id"]
             for r in conn.execute(
-                "SELECT id FROM tasks WHERE workspace_kind IN ('dir', 'worktree') "
-                f"AND status IN ({_placeholders(_DISPATCHABLE_STATUSES)})",
+                "SELECT id, status FROM tasks WHERE workspace_kind IN ('dir', 'worktree') "
+                f"AND status IN ({_placeholders(_DISPATCHABLE_STATUSES)}, 'blocked')",
                 _DISPATCHABLE_STATUSES,
             ).fetchall()
+            if r["status"] != "blocked" or not kb._has_sticky_block(conn, r["id"])
         ]
         conn.execute("UPDATE tasks SET workspace_path = NULL, branch_name = NULL")
         if parked:

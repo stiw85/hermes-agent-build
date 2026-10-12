@@ -22,6 +22,7 @@ from hermes_cli.timefmt import coerce_epoch
 from hermes_state_common import (
     _COMPRESSION_LOCK_ROW_SQL, _ENDED_ROW_SQL, _RESET_END_REASONS, _RESET_END_REASONS_SQL, _ended_by_compression,
     _json_or, _legacy_reset_child_sql, _placeholders, _sql_json_extract)
+from hermes_state_compression import _CHAIN_CAP
 from hermes_state_identity import (
     _absorbed_uids_json, _restore_identity_columns, _stable_tool_key, _tool_call_uid_map, _tool_call_uid_or_none, _tool_call_uids_json)
 
@@ -1691,7 +1692,7 @@ class SessionMessagesMixin:
         chain = [session_id]
         current = session
         seen = {session_id}
-        while len(chain) < 100:  # defensive bound, same as _session_lineage_root_to_tip
+        while len(chain) < _CHAIN_CAP:  # defensive bound, same as _session_lineage_root_to_tip
             if not self._is_compression_child_row(current):
                 break
             parent = self.get_session(current["parent_session_id"])

@@ -4,12 +4,25 @@ Ruamel's native schema includes bare y/n booleans and rejects duplicate keys.
 Every operation owns its parser/emitter; instances must not be shared by threads.
 """
 
+import warnings
 from io import StringIO
 from typing import Any, IO, overload
 
 from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError as YAMLError
+from ruamel.yaml.error import MantissaNoDotYAML1_1Warning, YAMLError as YAMLError
+from ruamel.yaml.representer import RoundTripRepresenter, SafeRepresenter
 from ruamel.yaml.resolver import VersionedResolver
+
+# The 1.1 reader accepts a dot-less exponent float (``1e-5``, hand-written or stored by an older
+# Hermes) but warns on every load.
+warnings.simplefilter("ignore", MantissaNoDotYAML1_1Warning)
+
+# ruamel's emitter can change a double-quoted value when it folds a long line right after an
+# escaped backslash (``D:\\Cent…`` → ``D:\\`` + bare newline): the fold reloads as a literal space
+# and a no-op save mutates the stored value (#119844). Writes must be value-preserving, so every
+# emitter in the tree keeps scalars on one line instead of folding (``None`` does NOT disable
+# folding on 0.18.x; only a large width does).
+ROUNDTRIP_YAML_WIDTH = 2**31 - 1
 
 
 class _Yaml11Resolver(VersionedResolver):
@@ -17,6 +30,28 @@ class _Yaml11Resolver(VersionedResolver):
     @property
     def processing_version(self) -> tuple[int, int]:
         return (1, 1)
+
+
+def _represent_float(representer: SafeRepresenter, data: float) -> Any:
+    # ``repr(1e-05)`` has no dot; YAML 1.1 wants one in the mantissa, and ruamel only adds it
+    # when a %YAML 1.1 directive is being written.
+    node = SafeRepresenter.represent_float(representer, data)
+    mantissa, e, exponent = node.value.partition("e")
+    if e and "." not in mantissa:
+        node.value = f"{mantissa}.0e{exponent}"
+    return node
+
+
+class _SafeRepresenter(SafeRepresenter):
+    pass
+
+
+class _RoundTripRepresenter(RoundTripRepresenter):
+    pass
+
+
+_SafeRepresenter.add_representer(float, _represent_float)
+_RoundTripRepresenter.add_representer(float, _represent_float)
 
 
 def _load(document: str | bytes, *, pure: bool) -> Any:
@@ -41,14 +76,14 @@ def safe_load(stream: str | bytes | IO[str] | IO[bytes]) -> Any:
 @overload
 def safe_dump(
     data: Any, stream: None = None, *, default_flow_style: bool = False,
-    sort_keys: bool = True, allow_unicode: bool = True, width: int = 80,
+    sort_keys: bool = True, allow_unicode: bool = True, width: int = ROUNDTRIP_YAML_WIDTH,
 ) -> str: ...
 
 
 @overload
 def safe_dump(
     data: Any, stream: IO[str], *, default_flow_style: bool = False,
-    sort_keys: bool = True, allow_unicode: bool = True, width: int = 80,
+    sort_keys: bool = True, allow_unicode: bool = True, width: int = ROUNDTRIP_YAML_WIDTH,
 ) -> None: ...
 
 
@@ -59,12 +94,13 @@ def safe_dump(
     default_flow_style: bool = False,
     sort_keys: bool = True,
     allow_unicode: bool = True,
-    width: int = 80,
+    width: int = ROUNDTRIP_YAML_WIDTH,
 ) -> str | None:
     """Write standard YAML data with readable Unicode and indented block lists."""
     # The C emitter ignores sequence offsets and escapes astral Unicode.
     yaml = YAML(typ="safe", pure=True)
     yaml.Resolver = _Yaml11Resolver
+    yaml.Representer = _SafeRepresenter
     yaml.default_flow_style = default_flow_style
     yaml.allow_unicode = allow_unicode
     yaml.width = width
@@ -78,19 +114,12 @@ def safe_dump(
     return output.getvalue()
 
 
-# ruamel's emitter can change a double-quoted value when it folds a long line right after an
-# escaped backslash (``D:\\Cent…`` → ``D:\\`` + bare newline): the fold reloads as a literal space
-# and a no-op save mutates the stored value (#119844). Config writes must be value-preserving, so
-# every round-trip emitter in the tree keeps scalars on one line instead of folding (``None``
-# does NOT disable folding on 0.18.x; only a large width does).
-ROUNDTRIP_YAML_WIDTH = 2**31 - 1
-
-
 def roundtrip_yaml() -> YAML:
     """Create a fresh comment/quote-preserving editor for user-authored YAML."""
     yaml = YAML(typ="rt")
     yaml.width = ROUNDTRIP_YAML_WIDTH
     yaml.Resolver = _Yaml11Resolver
+    yaml.Representer = _RoundTripRepresenter
     yaml.preserve_quotes = True
     yaml.allow_unicode = True
     yaml.default_flow_style = False

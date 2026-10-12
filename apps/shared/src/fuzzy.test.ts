@@ -112,6 +112,15 @@ describe('fuzzyRank', () => {
     expect(ranked[0]!.positions.every(i => i >= 0 && i < expected.length)).toBe(true)
   })
 
+  // 'İ'.toLowerCase() is two code units; the fold must not lengthen the target.
+  it('keeps positions on the original target when a character lower-cases to two', () => {
+    const target = 'İ-model'
+    const ranked = fuzzyRank([target], 'mod', m => m)
+
+    expect(ranked[0]!.positions.map(i => target[i]).join('')).toBe('mod')
+    expect(fuzzyRank(['modelİ'], 'l', m => m)[0]?.item).toBe('modelİ')
+  })
+
   it('matches across a derived key, not just the raw string', () => {
     const providers = [
       { slug: 'openai', name: 'OpenAI' },

@@ -1,5 +1,7 @@
 // Canonical text micro-helpers. Do not redefine these per-page.
 
+import { searchFold as sharedSearchFold } from '@hermes/shared/fuzzy'
+
 export const asText = (v: unknown): string => (typeof v === 'string' ? v : v == null ? '' : String(v))
 
 export const includesQuery = (v: unknown, q: string) => asText(v).toLowerCase().includes(q)
@@ -36,7 +38,7 @@ export const firstStringField = (record: Record<string, unknown>, keys: readonly
  *  must not care. Filter and highlight MUST call this on BOTH sides; a fold on
  *  only one is what made hyphen queries match without ever highlighting. */
 export function searchFold(v: unknown): string {
-  return asText(v).toLowerCase().replace(/[-_.]/g, ' ')
+  return sharedSearchFold(asText(v))
 }
 
 /** `searchFold` + substring: the one matcher every searchable picker uses. */

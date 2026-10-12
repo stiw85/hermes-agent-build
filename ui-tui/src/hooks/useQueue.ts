@@ -27,7 +27,7 @@ export function takeQueueItem(queue: QueueItem[], index: number, editedDisplay?:
 
   return {
     display: editedDisplay,
-    text: editedDisplay.includes(item.display) ? editedDisplay.replace(item.display, item.text) : editedDisplay
+    text: editedDisplay.includes(item.display) ? editedDisplay.replace(item.display, () => item.text) : editedDisplay
   }
 }
 

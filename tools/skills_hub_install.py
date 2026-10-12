@@ -235,14 +235,30 @@ def bundle_content_hash(bundle: SkillBundle) -> str:
 
     That function keys files by ``relative_to(...).as_posix()`` — forward slashes on every OS. See #62310.
     """
+    return _files_content_hash(bundle.files)
+
+
+def _files_content_hash(files: dict) -> str:
     h = hashlib.sha256()
-    normalized = {rel_path.replace("\\", "/"): content for rel_path, content in bundle.files.items()}
+    normalized = {rel_path.replace("\\", "/"): content for rel_path, content in files.items()}
     for rel_path in sorted(normalized):
         h.update(rel_path.encode("utf-8"))
         h.update(b"\x00")
         content = normalized[rel_path]
         h.update(content if isinstance(content, bytes) else content.encode("utf-8"))
     return f"sha256:{h.hexdigest()[:16]}"
+
+
+def installed_content_unchanged(install_dir: Path, recorded_hash: str) -> bool:
+    """Whether an installed skill still holds the content hashed at install time. Runtime caches a
+    helper script leaves behind (``__pycache__`` ...) are not edits; a bundle that shipped such
+    files still matches through the exact hash."""
+    if content_hash(install_dir) == recorded_hash:
+        return True
+    from tools.skills_sync_optional import _is_runtime_cache
+    return recorded_hash == _files_content_hash({
+        p.relative_to(install_dir).as_posix(): p.read_bytes() for p in install_dir.rglob("*")
+        if p.is_file() and not _is_runtime_cache(p, install_dir)})
 
 
 _SOURCE_ID_ALIASES = {"skills.sh": "skills-sh"}

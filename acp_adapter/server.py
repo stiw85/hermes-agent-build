@@ -34,7 +34,9 @@ from acp_adapter.events import (
 from acp_adapter.model_catalog import build_model_state, encode_model_choice
 from acp_adapter.permissions import make_approval_callback
 from acp_adapter.provenance import session_provenance_meta
-from acp_adapter.session import SessionManager, SessionState, _expand_acp_enabled_toolsets
+from acp_adapter.session import (
+    SessionManager, SessionState, _expand_acp_enabled_toolsets, _flatten_history_text,
+)
 from acp_adapter.tools import build_tool_complete, build_tool_start, coerce_tool_args
 from agent.context_compressor import (COMPRESSED_SUMMARY_METADATA_KEY, ContextCompressor)
 from agent.interrupt_compat import request_hard_interrupt
@@ -47,26 +49,6 @@ _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="acp-agent")
 
 # ListSessionsRequest has no client-side limit; clients paginate via `cursor`/`next_cursor`.
 _LIST_SESSIONS_PAGE_SIZE = 50
-
-
-def _flatten_history_text(value: Any) -> str:
-    """Persisted content/reasoning (str, or list of ``{"text"}`` / ``{"type": "text", "content"}``
-    parts) -> one stripped string; whitespace-only collapses to ``""`` ("nothing to emit")."""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, list):
-        parts: list[str] = []
-        for item in value:
-            if isinstance(item, dict):
-                text = item.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-                elif item.get("type") == "text" and isinstance(item.get("content"), str):
-                    parts.append(item["content"])
-            elif isinstance(item, str):
-                parts.append(item)
-        return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
-    return ""
 
 
 def _history_reasoning_text(message: dict[str, Any]) -> str:
@@ -730,7 +712,8 @@ class HermesACPAgent(SlashCommandsMixin, acp.Agent):
         return user_text, user_content
 
     def _claim_turn_or_queue(
-        self, state: SessionState, session_id: str, user_text: str, user_content: Any, text_only: bool
+        self, state: SessionState, session_id: str, user_text: str, user_content: Any, text_only: bool,
+        prompt: list[PromptBlock],
     ) -> str | None:
         """Mark the session running; if a turn is active, redirect it (text-only, supported
         runtime) or queue it. Returns the client message when absorbed, else None."""
@@ -748,7 +731,8 @@ class HermesACPAgent(SlashCommandsMixin, acp.Agent):
                         return "Redirected the active turn with your correction."
                 except Exception:
                     logger.debug("ACP active-turn redirect failed for %s", session_id, exc_info=True)
-            state.queued_prompts.append(user_text or "[Image attachment]")
+            # An image or attached file exists only in the prompt blocks: queue those, not their text.
+            state.queued_prompts.append(user_text if text_only else list(prompt))
             return f"Queued for the next turn. ({len(state.queued_prompts)} queued)"
 
     def _run_agent_turn(
@@ -843,7 +827,7 @@ class HermesACPAgent(SlashCommandsMixin, acp.Agent):
                 await self._drain_queued_prompts(state, session_id, self._conn)
                 return PromptResponse(stop_reason="end_turn")
 
-        absorbed = self._claim_turn_or_queue(state, session_id, user_text, user_content, text_only_prompt)
+        absorbed = self._claim_turn_or_queue(state, session_id, user_text, user_content, text_only_prompt, prompt)
         if absorbed is not None:
             if self._conn:
                 await self._conn.session_update(session_id, acp.update_agent_message_text(absorbed))
@@ -1013,9 +997,11 @@ class HermesACPAgent(SlashCommandsMixin, acp.Agent):
                 if state.is_running or state.command_op or not state.queued_prompts:
                     return
                 next_prompt = state.queued_prompts.pop(0)
+            blocks = next_prompt if isinstance(next_prompt, list) else [TextContentBlock(type="text", text=next_prompt)]
             if conn:
-                await conn.session_update(session_id, acp.update_user_message_text(next_prompt))
-            await self.prompt(prompt=[TextContentBlock(type="text", text=next_prompt)], session_id=session_id)
+                shown = _extract_text(blocks).strip() or "[Image attachment]"
+                await conn.session_update(session_id, acp.update_user_message_text(shown))
+            await self.prompt(prompt=blocks, session_id=session_id)
 
     # ---- Session settings (ACP protocol methods) -----------------------------
 

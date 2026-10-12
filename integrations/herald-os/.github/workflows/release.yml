@@ -1,0 +1,130 @@
+name: Release
+
+# Builds what Herald OS ships. A tag (v0.2.0) attaches the builds to a draft GitHub release; a manual
+# run only uploads them as workflow artifacts. Nothing here makes the repository or a release public.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mac:
+    name: macOS app (signed and notarized)
+    runs-on: macos-latest
+    env:
+      # A Developer ID Application certificate as a base64 .p12, and its password.
+      CSC_LINK: ${{ secrets.MAC_CERTIFICATE_P12 }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+      # electron-builder notarizes (and staples) through @electron/notarize when these are set.
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Fetch the pinned Hermes Agent snapshot
+        run: npm run sync-upstream
+      - run: npm ci
+      - name: Check the signing secrets
+        id: signing
+        run: |
+          if [[ -n "$CSC_LINK" && -n "$APPLE_ID" && -n "$APPLE_TEAM_ID" ]]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::The signing secrets are not set: this build is unsigned and not notarized."
+          fi
+      - name: Build, sign and notarize
+        env:
+          # Never pick up a stray identity from the runner's keychain for an unsigned build.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.signed }}
+        run: |
+          if [[ "${{ steps.signing.outputs.signed }}" != "true" ]]; then
+            # Unset secrets arrive as empty variables, and electron-builder reads an empty CSC_LINK as
+            # a certificate path (the working directory).
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          fi
+          npm run dist:mac --workspace apps/desktop -- ${{ steps.signing.outputs.signed == 'true' && '-c.dmg.sign=true' || '' }}
+      - name: Verify the signature and the notarization ticket
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          app="$(find apps/desktop/release -maxdepth 3 -name 'Herald OS.app' -print -quit)"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose "$app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herald-os-macos
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+          if-no-files-found: error
+      - name: Attach to the draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=(apps/desktop/release/*.dmg apps/desktop/release/*.zip)
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "Herald OS $GITHUB_REF_NAME" --notes "Draft written by the release workflow."
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+
+  linux:
+    name: Linux tarball (${{ matrix.arch }})
+    # Native runners per architecture: node-pty is compiled for the target, not cross-built.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Build tools for node-pty
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential python3
+      - name: Fetch the pinned Hermes Agent snapshot
+        run: npm run sync-upstream
+      - run: npm ci
+      - name: Build the tarball
+        run: npm run dist:linux --workspace apps/desktop -- --${{ matrix.arch }}
+      - name: Check what the tarball carries
+        run: |
+          tarball="$(ls apps/desktop/release/herald-os-*-linux-*.tar.gz)"
+          listing="$(tar -tzf "$tarball")"
+          for required in /herald-os /resources/app.asar /resources/herald-os-linux/bin/herald-os /resources/herald-os-linux/bin/herald-os-catalog \
+            /resources/herald-os-linux/session/herald-os-session /resources/themes/ /resources/catalog/ai.json /resources/herald-os-bridge/plugin.yaml; do
+            grep -q -- "$required" <<<"$listing" || { echo "::error::$required is missing from $tarball"; exit 1; }
+          done
+          # Named as downloaded, so sha256sum -c works next to the download.
+          (cd "$(dirname "$tarball")" && sha256sum "$(basename "$tarball")") | tee "$tarball.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herald-os-linux-${{ matrix.arch }}
+          path: |
+            apps/desktop/release/herald-os-*-linux-*.tar.gz
+            apps/desktop/release/herald-os-*-linux-*.tar.gz.sha256
+          if-no-files-found: error
+      - name: Attach to the draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "Herald OS $GITHUB_REF_NAME" --notes "Draft written by the release workflow."
+          gh release upload "$GITHUB_REF_NAME" apps/desktop/release/herald-os-*-linux-*.tar.gz apps/desktop/release/herald-os-*-linux-*.tar.gz.sha256 --clobber

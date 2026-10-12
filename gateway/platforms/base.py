@@ -3066,21 +3066,21 @@ class BasePlatformAdapter(ABC):
         # Only extract URLs that look like actual images.
         markers = ('.png', '.jpg', '.jpeg', '.gif', '.webp', 'fal.media', 'fal-cdn',
                    'replicate.delivery')
-        images = [(m.group(2), m.group(1)) for m in re.finditer(md_pattern, content)
-                  if any(m.group(2).lower().endswith(ext) or ext in m.group(2).lower()
-                         for ext in markers)]
-        images.extend((match.group(1), "") for match in re.finditer(html_pattern, content))
+        # Tags inside code are examples, never attachments.
+        code_spans = _code_spans(content)
+        hits = []  # (span, (url, alt)): markdown images first, then HTML
+        for pattern in (md_pattern, html_pattern):
+            for m in re.finditer(pattern, content):
+                url, alt = (m.group(2), m.group(1)) if pattern is md_pattern else (m.group(1), "")
+                is_image = pattern is html_pattern or any(
+                    url.lower().endswith(ext) or ext in url.lower() for ext in markers)
+                if is_image and not any(s <= m.start() < e for s, e in code_spans):
+                    hits.append((m.span(), (url, alt)))
+        images = [image for _, image in hits]
         if not images:
             return images, content
         # Remove only the tags we extracted, not every markdown image.
-        extracted_urls = {url for url, _ in images}
-
-        def _remove_if_extracted(match):
-            url = match.group(2) if match.lastindex >= 2 else match.group(1)
-            return '' if url in extracted_urls else match.group(0)
-        cleaned = content
-        for pattern in (md_pattern, html_pattern):
-            cleaned = re.sub(pattern, _remove_if_extracted, cleaned)
+        cleaned = _delete_spans(content, [span for span, _ in hits])
         return images, re.sub(r'\n{3,}', '\n\n', cleaned).strip()  # leftover blank lines
 
     async def send_voice(
@@ -3380,22 +3380,21 @@ class BasePlatformAdapter(ABC):
             r'(?<![/:\w.])(?:~/|/|[A-Za-z]:[/\\])(?:[\w.\-]+[/\\])*[\w.\-]+\.(?:' + ext_part + r')\b',
             re.IGNORECASE)
         code_spans = _code_spans(content)
-        unique: dict = {}  # expanded_path -> raw_match_text, deduped in discovery order
+        unique: dict = {}  # expanded_path -> spans of its bare mentions, deduped in discovery order
         for match in path_re.finditer(content):
             if any(s <= match.start() < e for s, e in code_spans):
                 continue
             raw = match.group(0)
             expanded = os.path.expanduser(raw)
             if os.path.isfile(expanded):
-                unique.setdefault(expanded, raw)
+                unique.setdefault(expanded, []).append(match.span())
             else:
                 # Most common reason a promised file never arrives — log the gap.
                 logger.info("Skipping bare file path in reply (no file on disk): %s", _log_safe_path(raw))
         if not unique:
             return [], content
-        cleaned = content
-        for raw in unique.values():
-            cleaned = cleaned.replace(raw, '')
+        # Only the mentions matched above go: the same path inside code or a URL is not ours.
+        cleaned = _delete_spans(content, [span for spans in unique.values() for span in spans])
         return list(unique), re.sub(r'\n{3,}', '\n\n', cleaned).strip()
 
     async def _keep_typing(self, chat_id: str, interval: float = 2.0, metadata=None,
@@ -4890,7 +4889,7 @@ class BasePlatformAdapter(ABC):
             if headroom < 1:
                 headroom = max(1, max_length // 2)
             # Remainder fits in one final chunk; close a reopened fence if still open.
-            if _len(prefix) + _len(remaining) <= max_length - INDICATOR_RESERVE:
+            if _len(prefix) + _len(remaining) <= max_length - INDICATOR_RESERVE - (_len(FENCE_CLOSE) if prefix else 0):
                 final_chunk = prefix + remaining
                 if carry_lang is not None and fence_state_after(remaining, True, carry_lang)[0]:
                     final_chunk += FENCE_CLOSE
@@ -4920,11 +4919,12 @@ class BasePlatformAdapter(ABC):
                         candidate.rfind(" ", 0, last_bt), candidate.rfind("\n", 0, last_bt))
                     if safe_split > _cp_limit // 4:
                         split_at = safe_split
-            chunk_body = remaining[:split_at]
-            remaining = remaining[split_at:].lstrip()
+            chunk_body, rest = remaining[:split_at], remaining[split_at:]
             full_chunk = prefix + chunk_body
             # Walk only chunk_body (not the prepended prefix) for the fence state.
             in_code, lang = fence_state_after(chunk_body, carry_lang is not None, carry_lang or "")
+            # Inside a fence only the boundary newline goes: the next line's indentation is code.
+            remaining = rest.lstrip("\n") if in_code and rest.strip() else rest.lstrip()
             carry_lang = lang if in_code else None
             # Close the orphaned fence so the chunk stands alone.
             chunks.append(full_chunk + FENCE_CLOSE if in_code else full_chunk)

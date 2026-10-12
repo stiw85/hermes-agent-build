@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import re
 import threading
 import time
 from pathlib import Path
@@ -41,7 +42,9 @@ def _normalize_rule(rule: Any) -> Optional[str]:
     if "://" in value:
         parsed = urlparse(value)
         value = parsed.netloc or parsed.path
-    return value.split("/", 1)[0].strip().rstrip(".").removeprefix("www.") or None
+    # Userinfo and port are not part of the host a URL check compares against.
+    value = re.sub(r":\d+$", "", value.split("/", 1)[0].rsplit("@", 1)[-1].strip())
+    return value.rstrip(".").removeprefix("www.") or None
 
 
 def _iter_blocklist_file_rules(path: Path) -> list[str]:

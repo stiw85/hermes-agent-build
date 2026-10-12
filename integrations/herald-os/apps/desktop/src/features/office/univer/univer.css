@@ -1,0 +1,10 @@
+/*
+ * Univer on Herald's glass. Univer paints its chrome with its own palette (set from Herald's theme
+ * in theme.ts); here its outer layers become transparent so they sit on the window's glass. Its
+ * classes carry !important in dark mode, hence the !important here.
+ */
+
+[data-office-root] [data-u-comp='workbench-layout'],
+[data-office-root] [data-u-comp='workbench-layout'] > div {
+  background-color: transparent !important;
+}

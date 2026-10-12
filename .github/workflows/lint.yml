@@ -115,6 +115,7 @@ jobs:
             --head-ruff .lint-reports/head/ruff.json \
             --base-ty   .lint-reports/base/ty.json \
             --head-ty   .lint-reports/head/ty.json \
+            --base-root /tmp/lint-base \
             --base-ref  "${{ steps.base.outputs.ref }}" \
             --head-ref  "$HEAD_REF" \
             --output    .lint-reports/summary.md

@@ -35,6 +35,7 @@ describe('killToLineStart', () => {
 
   it('is a no-op at the very start of the buffer', () => {
     expect(killToLineStart('abc', 0)).toEqual({ cursor: 0, value: 'abc' })
+    expect(killToLineStart('\nabc', 0)).toEqual({ cursor: 0, value: '\nabc' })
   })
 })
 

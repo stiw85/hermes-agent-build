@@ -119,6 +119,11 @@ Hermes reads environment variables from the process environment and, for user-ma
 | `OPENCODE_ZEN_BASE_URL` | Override OpenCode Zen base URL |
 | `OPENCODE_GO_API_KEY` | OpenCode Go API key — $10/month subscription for open models ([opencode.ai](https://opencode.ai/auth)) |
 | `OPENCODE_GO_BASE_URL` | Override OpenCode Go base URL |
+| `COMMANDCODE_API_KEY` | CommandCode API key (GOAT/Pro/Max/Provider plans — 30+ models via one key) |
+| `COMMANDCODE_BASE_URL` | Override CommandCode base URL |
+| `COMMANDCODE_ANTHROPIC_BASE_URL` | Override CommandCode (Anthropic) base URL |
+| `META_MODEL_API_KEY` | Meta Model API key; `MODEL_API_KEY` and `META_API_KEY` are also accepted |
+| `META_BASE_URL` | Override Meta Model API base URL |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Explicit Claude Code token override if you export one manually |
 | `HERMES_MODEL` | Override model name at process level (used by cron scheduler; prefer `config.yaml` for normal use) |
 | `VOICE_TOOLS_OPENAI_KEY` | Preferred OpenAI key for OpenAI speech-to-text and text-to-speech providers |
@@ -142,6 +147,7 @@ For native Anthropic auth, Hermes prefers Claude Code's own credential files whe
 | `NOUS_INFERENCE_BASE_URL` | Override Nous inference API URL. Also the only non-production host a Portal response may name: when the Portal's returned inference URL matches this override it is accepted and persisted instead of being healed to production. Per-profile under multiplexing. |
 | `HERMES_NOUS_MIN_KEY_TTL_SECONDS` | Min agent key TTL before re-mint (default: 1800 = 30min) |
 | `HERMES_NOUS_TIMEOUT_SECONDS` | HTTP timeout for Nous credential / token flows |
+| `HERMES_ANON_API_SECRET` | Shared secret for the Nous free-tier sign-up endpoints while they are in their gated integration phase (not needed once the gate is removed) |
 | `HERMES_DUMP_REQUESTS` | Dump API request payloads to log files (`true`/`false`) |
 | `HERMES_PREFILL_MESSAGES_FILE` | Path to a JSON file of ephemeral prefill messages injected at API-call time |
 | `HERMES_TIMEZONE` | IANA timezone override (for example `America/New_York`). On Linux/macOS it is also exported as `TZ` to `execute_code` children; on Windows those children keep the OS zone instead, because the Windows C runtime only understands POSIX-form `TZ` strings and mis-parses an IANA name into a wrong offset |
@@ -154,6 +160,7 @@ For native Anthropic auth, Hermes prefers Claude Code's own credential files whe
 | `FIRECRAWL_API_KEY` | Web scraping and cloud browser ([firecrawl.dev](https://firecrawl.dev/)) |
 | `FIRECRAWL_API_URL` | Custom Firecrawl API endpoint for self-hosted instances (optional) |
 | `TAVILY_API_KEY` | Optional Tavily API key for higher search/extract limits. After selecting Tavily as the web backend, keyless access works without it ([app.tavily.com](https://app.tavily.com/home), [keyless docs](https://docs.tavily.com/documentation/keyless)) |
+| `KEENABLE_API_KEY` | Keenable API key for fast independent-index web search and page fetch (optional — the keyless free tier works without it) |
 | `TAVILY_BASE_URL` | Override the Tavily API endpoint. Useful for corporate proxies and self-hosted Tavily-compatible search backends. Same pattern as `GROQ_BASE_URL`. |
 | `PERPLEXITY_API_KEY` | Perplexity Search API key for the `perplexity` web backend — ranked search results plus query-relevant page snippets for extract ([perplexity.ai/account/api](https://www.perplexity.ai/account/api)) |
 | `PERPLEXITY_BASE_URL` | Override the Perplexity API endpoint (default `https://api.perplexity.ai`) for proxies (optional) |
@@ -243,6 +250,8 @@ These variables configure the [Tool Gateway](../user-guide/features/tool-gateway
 | `TOOL_GATEWAY_SCHEME` | HTTP or HTTPS scheme for gateway URLs (default: `https`) |
 | `TOOL_GATEWAY_USER_TOKEN` | Auth token for the Tool Gateway (normally auto-populated from Nous auth) |
 | `FIRECRAWL_GATEWAY_URL` | Override URL for the Firecrawl gateway endpoint specifically |
+| `TOOL_GATEWAY_URL` | Exact shared tool-gateway origin for on-origin vendors and media uploads (optional) |
+| `CONNECTOR_GATEWAY_URL` | Exact connector-gateway origin for the connectors API (optional) |
 
 ## Terminal Backend
 
@@ -719,6 +728,8 @@ Connect Hermes to [Photon](https://photon.codes/) / Spectrum (iMessage and other
 | `PHOTON_TELEMETRY` | Enable Spectrum SDK telemetry in the sidecar (`true`/`false`, default `false`; toggle with `hermes photon telemetry on|off`). |
 | `PHOTON_SIDECAR_PORT` | Loopback port for the Node sidecar control + inbound channel (default `8789`). |
 | `PHOTON_SIDECAR_AUTOSTART` | Spawn the Node sidecar on connect (`true`/`false`, default `true`). |
+| `PHOTON_SIDECAR_TOKEN` | Shared secret for the loopback sidecar channel (default: random per start). |
+| `PHOTON_NODE_BIN` | Path to the node binary (default: PM's pinned node, then `PATH`). |
 | `PHOTON_DASHBOARD_HOST` | Photon Dashboard API host (default `https://app.photon.codes`). |
 | `PHOTON_SPECTRUM_HOST` | Photon Spectrum API host (default `https://spectrum.photon.codes`). |
 
@@ -735,6 +746,7 @@ Connect Hermes to [Photon](https://photon.codes/) / Spectrum (iMessage and other
 | `BUZZ_ALLOW_ALL_USERS` | Allow any community member to talk to the agent (`true`/`false`) |
 | `BUZZ_TRANSPORT` | Inbound transport: `auto` (WebSocket w/ poll fallback, default), `websocket`, or `poll` |
 | `BUZZ_POLL_INTERVAL` | Seconds between inbound poll sweeps (default: `4`) |
+| `BUZZ_REPLY_IN_THREAD` | Thread replies under the triggering message (`true`/`false`, default: `true`); `false` posts flat to the channel timeline |
 | `BUZZ_AUTH_TAG` | Optional NIP-OA owner-attestation auth tag JSON for NIP-42 WebSocket auth |
 | `BUZZ_CLI_PATH` | Path to the buzz CLI binary (default: `buzz` on PATH, then `~/bin/buzz`) |
 
@@ -753,12 +765,26 @@ The Microsoft Teams platform adapter (Bot Framework / Azure AD), distinct from t
 | `TEAMS_ALLOW_ALL_USERS` | Allow any Teams user to trigger the bot (dev only). |
 | `TEAMS_HOME_CHANNEL` | Default chat/channel ID for cron / notification delivery. |
 | `TEAMS_HOME_CHANNEL_NAME` | Display name for the Teams home channel. |
+| `TEAMS_REQUIRE_MENTION` | Only answer channel/group-chat messages that @mention the bot or reply to it (default `false`; needed once the app has RSC message-read consent). |
 
 ### Raft
 
 | Variable | Description |
 |----------|-------------|
 | `RAFT_PROFILE` | Raft agent profile slug — auto-enables the adapter when set. |
+
+### A2A (agent-to-agent)
+
+| Variable | Description |
+|----------|-------------|
+| `A2A_PEER_TOKENS` | Per-peer bearer tokens (`alice:tok1,bob:tok2`). Each remote agent gets its own credential; the matched name is the authenticated identity used for rate limiting, trust, and audit. |
+| `A2A_BEARER_TOKEN` | Shared bearer token for inbound A2A calls (identity falls back to caller IP). With no token of any kind the server binds to `127.0.0.1` only. |
+| `A2A_PUSH_SECRET` | HMAC secret for signing push notifications (default: the shared bearer token). |
+| `A2A_HOST` | Inbound bind host. Defaults to `127.0.0.1`; only widens to `0.0.0.0` when a bearer token is set AND you opt in here. |
+| `A2A_PORT` | Inbound A2A server port (default `9900`). |
+| `A2A_AGENT_NAME` | Name advertised on this agent's Agent Card (default: hostname-derived). |
+| `A2A_ALLOW_ALL_USERS` | Allow any authenticated A2A peer to reach the agent (dev only). |
+| `A2A_HOME_CHANNEL` | Task/context id used as the cron / notification delivery target for `deliver=a2a`. |
 
 ### Advanced Messaging Tuning
 
@@ -797,8 +823,8 @@ Advanced per-platform knobs for throttling the outbound message batcher. Most us
 | `GATEWAY_RELAY_SECRET` | Per-gateway relay secret used to authenticate the WebSocket. If this is already configured, managed self-provisioning is skipped. Mirrors `gateway.relay_secret`. |
 | `GATEWAY_RELAY_DELIVERY_KEY` | Connector-issued delivery key retained for relay/passthrough authentication compatibility. Current relay inbound messages arrive on the outbound WebSocket rather than a gateway-side HTTP receiver. |
 | `GATEWAY_RELAY_ENROLL_TOKEN` | Enrollment token consumed by `hermes gateway enroll` when `--token` is not passed explicitly. |
-| `GATEWAY_RELAY_PLATFORM` | Optional platform name advertised in the relay capability descriptor. |
-| `GATEWAY_RELAY_BOT_ID` | Optional bot identifier advertised in the relay capability descriptor. |
+| `GATEWAY_RELAY_PLATFORMS` | Comma-separated list of platforms this gateway fronts over one relay connection (e.g. `discord,telegram`). |
+| `GATEWAY_RELAY_BOT_IDS` | JSON map of per-platform bot identities, e.g. `{"discord": {"botId": "…"}}`. Paired with `GATEWAY_RELAY_PLATFORMS`. |
 | `GATEWAY_RELAY_ENDPOINT` | Optional gateway endpoint advertised for connector modes that need a callback/passthrough URL; not required for the default WS-only inbound relay path. Mirrors `gateway.relay_endpoint`. |
 | `GATEWAY_RELAY_ROUTE_KEYS` | Comma-separated relay route keys advertised to the connector. Mirrors `gateway.relay_route_keys`. |
 | `HERMES_FILE_MUTATION_VERIFIER` | Enable the per-turn file-mutation verifier footer (default: `true`). When enabled, Hermes appends an advisory listing any `write_file` / `patch` calls that failed during the turn and were not superseded by a successful write. Set to `0`, `false`, `no`, or `off` to suppress. Mirrors `display.file_mutation_verifier` in `config.yaml`; the env var wins when set. |

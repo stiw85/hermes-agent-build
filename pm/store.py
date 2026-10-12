@@ -279,11 +279,12 @@ def flatten_single_dir(dest: Path) -> None:
     if len(entries) != 1 or not entries[0].is_dir() or entries[0].name in keep:
         return
     inner = entries[0]
-    for item in list(inner.iterdir()):
-        target = dest / item.name
-        if target.exists():
-            return
-        retry_held(lambda: item.rename(target))
+    items = list(inner.iterdir())
+    # Decided before the first move: a half-hoisted tree separates a binary from its siblings.
+    if any((dest / item.name).exists() for item in items):
+        return
+    for item in items:
+        retry_held(lambda: item.rename(dest / item.name))
     retry_held(inner.rmdir)
 
 

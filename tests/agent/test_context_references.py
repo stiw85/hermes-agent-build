@@ -81,21 +81,23 @@ def test_parse_typed_references_ignores_emails_and_handles():
 def test_folder_listing_falls_back_when_rg_is_blocked(sample_repo: Path):
     from agent.context_references import preprocess_context_references
 
-    real_run = subprocess.run
+    real_popen = subprocess.Popen
 
     def blocked_rg(*args, **kwargs):
         cmd = args[0] if args else kwargs.get("args")
         if isinstance(cmd, list) and cmd and cmd[0] == "rg":
             raise PermissionError("rg blocked by policy")
-        return real_run(*args, **kwargs)
+        return real_popen(*args, **kwargs)
 
-    with patch("agent.context_references.subprocess.run", side_effect=blocked_rg):
+    # The listing spawns through Popen (_run_quiet); patching subprocess.run blocked nothing.
+    with patch("agent.context_references.subprocess.Popen", side_effect=blocked_rg) as spawn:
         result = preprocess_context_references(
             "Review @folder:src/",
             cwd=sample_repo,
             context_length=100_000,
         )
 
+    assert any(call.args[0][0] == "rg" for call in spawn.call_args_list)
     assert result.expanded
     assert "src/" in result.message
     assert "main.py" in result.message

@@ -24,8 +24,9 @@
 # checkout has no tags and this exits non-zero rather than silently emitting an
 # empty matrix.
 #
-# Only vYYYY.M.D[.N] release tags are considered; the repo also carries
-# backup/* and one-off tags that are not releases.
+# Only release tags are considered, in either scheme the project has used
+# (CalVer vYYYY.M.D[.N], then SemVer vX.Y.Z); the repo also carries backup/*,
+# canary and one-off tags that are not releases.
 
 set -euo pipefail
 
@@ -64,12 +65,11 @@ if [ -z "$REPO" ]; then
   REPO="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$script_dir")"
 fi
 
-# sort -V orders v2026.4.8 before v2026.4.13 (numeric), which a plain
-# lexicographic sort gets wrong.
+# Ordered by creation date, not by version: the SemVer line (v0.x) continues
+# the CalVer one (v2026.x), so a version sort would put every new release first.
 mapfile -t tags < <(
-  git -C "$REPO" tag --list 'v*' \
-    | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$' \
-    | sort -V
+  git -C "$REPO" for-each-ref --sort=creatordate --format='%(refname:short)' 'refs/tags/v*' \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$'
 )
 
 total="${#tags[@]}"

@@ -333,6 +333,13 @@ def _resolve_module_source(module_name: str, limit: int = 8192) -> str:
     return _read_source_from_origin(resolve_module_origin(module_name), limit)
 
 
+def declared_name(data: Mapping, plugin_dir: Path) -> str:
+    """The manifest's ``name``, or the directory name when it is missing, empty or not a string
+    (a YAML list or mapping would reach the registry as an unhashable key)."""
+    name = data.get("name")
+    return name if isinstance(name, str) and name.strip() else plugin_dir.name
+
+
 def manifest_key(manifest: PluginManifest) -> str:
     """Registry id of a manifest: the path-derived ``key`` when set, else the bare ``name``."""
     return manifest.key or manifest.name
@@ -535,7 +542,9 @@ def parse_manifest_file(
             logger.warning("Failed to parse %s: top level must be a mapping, got %s (#14066)",
                            manifest_file, type(data).__name__)
             return None
-        name = data.get("name", plugin_dir.name)
+        name = declared_name(data, plugin_dir)
+        if data.get("name", name) != name:
+            logger.warning("Plugin %s: name must be a non-empty string; using the directory name", plugin_dir.name)
         key = f"{prefix}/{plugin_dir.name}" if prefix else name
         kind = _manifest_kind(data, key, plugin_dir)
         logger.debug(

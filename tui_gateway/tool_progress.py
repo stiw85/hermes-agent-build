@@ -66,11 +66,13 @@ def _tool_result_text(result: object) -> str:
 def _fmt_tool_duration(seconds: float | None) -> str:
     if seconds is None:
         return ""
-    if seconds < 10:
+    # Pick the unit from the ROUNDED value: 59.6 is "1m", never "60s".
+    if round(seconds, 1) < 10:
         return f"{seconds:.1f}s"
-    if seconds < 60:
-        return f"{round(seconds)}s"
-    mins, secs = divmod(round(seconds), 60)
+    total = round(seconds)
+    if total < 60:
+        return f"{total}s"
+    mins, secs = divmod(total, 60)
     return f"{mins}m {secs}s" if secs else f"{mins}m"
 
 

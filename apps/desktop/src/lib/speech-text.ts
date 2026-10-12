@@ -35,10 +35,13 @@ const HASH_PREFIX_HEX_RE = /\b(?:sha(?:-?256|-?512|-?1|3)?|blake2[ab]?|md5|crc32
 const HEX_RUN_RE = /[0-9a-fA-F]{7,64}/
 const IDENTIFIER_TOKEN_RE = /[A-Za-z0-9_./~@-]+/g
 const DATE_TOKEN_RE = /^\d{4}[-/]\d{1,2}(?:[-/]\d{1,2})?$/
+const RATIO_TOKEN_RE = /^\d+(?:\/\d+)+$/
 
-function isDenseIdentifier(token: string): boolean {
-  if (token.includes('@') || DATE_TOKEN_RE.test(token)) {
-    return false // email addresses, dates ("2026-09-28", "2026/06/02")
+function isDenseIdentifier(rawToken: string): boolean {
+  const token = rawToken.replace(/\.+$/, '') // a sentence-final full stop is not part of the token ("COVID-19.")
+
+  if (token.includes('@') || DATE_TOKEN_RE.test(token) || RATIO_TOKEN_RE.test(token)) {
+    return false // email addresses, dates ("2026-09-28", "2026/06/02"), ratios ("24/7", "1/2")
   }
 
   if (/^(?:~\/|\.\.?\/|\/)/.test(token)) {

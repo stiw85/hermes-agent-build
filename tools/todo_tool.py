@@ -57,6 +57,8 @@ class TodoStore:
         """Update existing items only in the fields provided; append new ones (validated)."""
         existing = {item["id"]: item for item in self._items}
         for t in self._dedupe_by_id(todos):
+            if not isinstance(t, dict):
+                continue  # nothing to merge by; replace mode turns these into placeholders
             item_id = str(t.get("id", "")).strip()
             if not item_id:
                 continue  # can't merge without an id
@@ -66,8 +68,8 @@ class TodoStore:
                 existing[validated["id"]] = validated
                 self._items.append(validated)
                 continue
-            if t.get("content"):
-                cur["content"] = self._cap_content(str(t["content"]).strip())
+            if content := str(t.get("content") or "").strip():  # whitespace-only keeps the existing text
+                cur["content"] = self._cap_content(content)
             if t.get("status") and str(t["status"]).strip().lower() in VALID_STATUSES:
                 cur["status"] = str(t["status"]).strip().lower()
             if "parent" in t:

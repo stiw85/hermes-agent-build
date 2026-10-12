@@ -118,10 +118,10 @@ def _search_stdout_and_limit(result: ExecuteResult) -> tuple[str, Optional[str]]
     return result.stdout, None
 
 
-# A real rg/grep output line is a whitespace-free path token followed by ``:``
-# (match/count), ``-`` (context), or nothing (files_only); tool diagnostics
-# ("rg: ...", indented carets) never match.
-_SEARCH_OUTPUT_RE = re.compile(r'^([A-Za-z]:)?[^\s:][^\n]*?[:\-]\d|^[^\s:][^\s]*$')
+# A real rg/grep output line is a path followed by ``:`` (match/count), ``-``
+# (context), or nothing (files_only; the path may contain spaces); tool diagnostics
+# ("rg: ...", indented carets, "error: ...") never match.
+_SEARCH_OUTPUT_RE = re.compile(r'^([A-Za-z]:)?[^\s:][^\n]*?[:\-]\d|^[^\s:](?!.*: )[^\n]*$')
 
 
 def _split_tool_diagnostics(output: str) -> tuple[str, str]:
@@ -191,9 +191,36 @@ def _maybe_warn_line_oriented_newline_pattern(result: SearchResult, pattern: str
 # Match lines are "file:lineno:content". Windows paths carry a drive letter
 # ("C:\path"), so a naive split(":") breaks — the regex handles both.
 _MATCH_LINE_RE = re.compile(r'^([A-Za-z]:)?(.*?):(\d+):(.*)$')
+_CONTEXT_SEPARATOR_RE = re.compile(r'-(\d+)-')
 
 # Output-mode → engine flag (identical for rg and grep).
 _OUTPUT_MODE_FLAGS = {"files_only": "-l", "count": "-c"}
+
+
+def _parse_content_lines(lines: list[str], context: int) -> list[SearchMatch]:
+    """``path:line:text`` match lines plus, when requested, ``path-line-text`` context
+    lines. A context line is attributed to the path of a real match line first, since
+    its text may itself contain ``:<n>:`` or ``-<n>-`` (timestamps, dates, slices);
+    only then do the shape-based parsers get a say."""
+    match_paths = sorted(
+        {(m.group(1) or '') + m.group(2) for ln in lines if (m := _MATCH_LINE_RE.match(ln))},
+        key=len, reverse=True) if context > 0 else []
+    matches: list[SearchMatch] = []
+    for line in lines:
+        if line == "--":
+            continue
+        parsed = next(
+            ((path, int(sep.group(1)), line[sep.end():]) for path in match_paths
+             if line.startswith(path) and (sep := _CONTEXT_SEPARATOR_RE.match(line, len(path)))),
+            None)
+        if parsed is None and (m := _MATCH_LINE_RE.match(line)):
+            parsed = ((m.group(1) or '') + m.group(2), int(m.group(3)), m.group(4))
+        # Context lines only when requested, to avoid false positives on dashy paths.
+        if parsed is None and context > 0:
+            parsed = _parse_search_context_line(line)
+        if parsed:
+            matches.append(SearchMatch(path=parsed[0], line_number=parsed[1], content=parsed[2][:500]))
+    return matches
 
 
 def _parse_search_output(result, output_mode: str, limit: int, offset: int,
@@ -208,13 +235,15 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
         error_msg = diagnostics.strip() or result.stdout.strip() or "Search error"
         return SearchResult(error=f"Search failed: {error_msg}", total_count=0)
     lines = [ln for ln in payload.strip().split('\n') if ln]
+    # The pipeline fetches one row past the page, so a longer list means more exist.
+    more_rows = len(lines) > offset + limit
     if output_mode == "files_only":
         return SearchResult(
             files=lines[offset:offset + limit], total_count=len(lines),
-            truncated=bool(limit_reason), limit_reason=limit_reason, warning=warning)
+            truncated=more_rows or bool(limit_reason), limit_reason=limit_reason, warning=warning)
     if output_mode == "count":
         counts = {}
-        for line in lines:
+        for line in lines[offset:offset + limit]:
             if ':' in line:
                 path, n = line.rsplit(':', 1)
                 try:
@@ -223,22 +252,8 @@ def _parse_search_output(result, output_mode: str, limit: int, offset: int,
                     pass
         return SearchResult(
             counts=counts, total_count=sum(counts.values()),
-            truncated=bool(limit_reason), limit_reason=limit_reason)
-    matches = []
-    for line in lines:
-        if line == "--":
-            continue
-        m = _MATCH_LINE_RE.match(line)
-        if m:
-            matches.append(SearchMatch(
-                path=(m.group(1) or '') + m.group(2), line_number=int(m.group(3)), content=m.group(4)[:500],
-            ))
-            continue
-        # Context lines only when requested, to avoid false positives on dashy paths.
-        if context > 0:
-            parsed = _parse_search_context_line(line)
-            if parsed:
-                matches.append(SearchMatch(path=parsed[0], line_number=parsed[1], content=parsed[2][:500]))
+            truncated=more_rows or bool(limit_reason), limit_reason=limit_reason)
+    matches = _parse_content_lines(lines, context)
     total = len(matches)
     return SearchResult(
         matches=matches[offset:offset + limit], total_count=total,
@@ -1004,14 +1019,14 @@ class SearchMixin:
     def _run_search_pipeline(self, cmd_parts: list[str], output_mode: str, limit: int,
                              offset: int, context: int, warning: Optional[str] = None,
                              line_cap: bool = False) -> SearchResult:
-        """Run ``cmd_parts | head -n <fetch_limit>`` under pipefail and parse. Extra
-        rows report the true total (context mode also emits "--" separators, so
-        grab 200 more). pipefail keeps the engine's exit 2 alive across ``| head``
+        """Run ``cmd_parts | head -n <fetch_limit>`` under pipefail and parse. One extra
+        row tells a full page from a truncated one (context mode also emits "--"
+        separators, so grab 200 more). pipefail keeps the engine's exit 2 alive across ``| head``
         (a truncating head makes rg exit 0 / grep 141, which the ==2 guard ignores).
         ``line_cap`` appends ``| cut -c1-2000`` for engines without --max-columns
         (grep): bounds giant single-line matches at the pipe layer; skipped for
         files_only/count where lines are paths/counts."""
-        fetch_limit = limit + offset + (200 if context > 0 else 0)
+        fetch_limit = limit + offset + (200 if context > 0 else 1)
         if line_cap:  # grep/find pipelines: shell only, with the column cap
             parts = cmd_parts + ["|", "head", "-n", str(fetch_limit)]
             if output_mode not in ("files_only", "count"):

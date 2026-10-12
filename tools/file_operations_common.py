@@ -243,14 +243,13 @@ def _detect_line_ending(sample: str) -> Optional[str]:
 
 
 def _normalize_line_endings(text: str, target: str) -> str:
-    """Convert every line ending (CRLF, lone CR, LF) in ``text`` to ``target``.
-    Idempotent. Collapses to LF first — separate replacements would
-    double-convert CRLF → LFLF."""
-    lf_normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    """Convert the CRLF / LF line endings of ``text`` to ``target``. Idempotent.
+    A lone CR is left alone: it is data inside a line (spinner captures, fixtures),
+    not a terminator, and rewriting it would change lines the caller never touched."""
     if target == "\n":
-        return lf_normalized
+        return text.replace("\r\n", "\n")
     if target == "\r\n":
-        return lf_normalized.replace("\n", "\r\n")
+        return re.sub(r"(?<!\r)\n", "\r\n", text)
     return text
 
 

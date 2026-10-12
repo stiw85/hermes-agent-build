@@ -616,14 +616,14 @@ def _resolve_single_delivery_target(
     provenance (fan-out is never continuable), while a user-written bare platform token is a
     deliberate home-channel address and gets the ``home`` tag."""
     origin = _resolve_origin(job)
-    if deliver_value == "local":
+    if deliver_value.lower() == "local":
         return None
     # Must precede the generic platform:chat_id split so the profile name isn't parsed as chat_id.
     bot_chat_profile = parse_bot_chat_deliver_token(deliver_value)
     if bot_chat_profile is not None:
         return _resolve_bot_chat_target(job, bot_chat_profile)
 
-    if deliver_value == "origin":
+    if deliver_value.lower() == "origin":
         if origin:
             return {
                 "platform": origin["platform"],
@@ -1952,9 +1952,9 @@ def _unresolved_delivery_outcome(job: dict, for_failure: bool) -> Optional[str]:
     origin-less ``origin`` (CLI jobs never capture an origin — a spurious error every run), else
     an error string."""
     deliver_value = _normalize_deliver_value(_delivery_lane_value(job, for_failure=for_failure))
-    if deliver_value == "local":
+    if deliver_value.lower() == "local":
         return None
-    if deliver_value == "origin":
+    if deliver_value.lower() == "origin":
         logger.info(
             # deliver=origin with no resolvable origin and no configured home channels: treat as local
             # rather than reporting an error. CLI-created jobs never capture a {platform, chat_id} origin,

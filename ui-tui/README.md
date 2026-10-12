@@ -117,12 +117,13 @@ No model tool schema or prompt-caching behavior changes.
 ### Slash command subsystem (`src/app/slash/`)
 
 - `types.ts` — `SlashCommand` interface and `SlashRunCtx` execution context (gateway rpc, transcript helpers, session refs, stale-guard)
-- `registry.ts` — assembles `SLASH_COMMANDS` from all command files in registration order (core → billing → credits → session → ops → setup → debug) and exposes `findSlashCommand(name)` for case-insensitive lookup
+- `registry.ts` — assembles `SLASH_COMMANDS` from all command files in registration order (core → topup → session → subscription → ops → wake → setup → debug) and exposes `findSlashCommand(name)` for case-insensitive lookup
 - `commands/core.ts` — general TUI commands
-- `commands/billing.ts` — `/billing`: manage Nous remote spending — buy credits, auto-reload, limits
-- `commands/credits.ts` — `/credits`
+- `commands/topup.ts` — `/topup`: Nous balance and billing — buy credits, auto-reload, limits
+- `commands/subscription.ts` — `/subscription`
 - `commands/session.ts` — session and agent commands
 - `commands/ops.ts` — operations commands
+- `commands/wake.ts` — `/wake`
 - `commands/setup.ts` — `/setup`
 - `commands/debug.ts` — `/heapdump`, `/mem`
 

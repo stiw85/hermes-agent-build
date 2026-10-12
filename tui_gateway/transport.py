@@ -20,6 +20,8 @@ import os
 import threading
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
+from agent.message_sanitization import _sanitize_surrogates
+
 # Errno values that mean "the peer is gone" rather than "the host has a real I/O problem". Anything
 # outside this set re-raises so it surfaces in the crash log instead of looking like a clean disconnect.
 _PEER_GONE_ERRNOS = frozenset({
@@ -83,9 +85,11 @@ def _raise_unless_peer_gone(exc: Exception, what: str) -> None:
 def serialize_frame(obj: dict, peer: str, log: logging.Logger) -> str:
     """``json.dumps`` the frame; an unserializable payload becomes a JSON-RPC error frame carrying
     the original id. Shared by every transport: without it the TypeError escaped from a pool
-    worker (the executor swallows it), so the client waited forever with no log line (#92506)."""
+    worker (the executor swallows it), so the client waited forever with no log line (#92506).
+    Lone surrogates (a non-UTF-8 file name from ``os.listdir``) become U+FFFD: a strict UTF-8
+    peer stream cannot encode them, and that write error is lost the same way."""
     try:
-        return json.dumps(obj, ensure_ascii=False)
+        return _sanitize_surrogates(json.dumps(obj, ensure_ascii=False))
     except (TypeError, ValueError) as exc:
         rid = obj.get("id") if isinstance(obj, dict) else None
         log.error("frame serialization failed peer=%s id=%s error_type=%s error=%s",

@@ -494,6 +494,9 @@ def _is_nix(p: str) -> bool:
 def _py_irrelevant(p: str) -> bool:
     if p.startswith(_PY_RELEVANT_SITE) or p in _PY_RELEVANT_CONTRACT_FILES:
         return False
+    # The lint lane's size guard (scripts/ci/check_agents_md_size.py) caps every AGENTS.md.
+    if os.path.basename(p) == "AGENTS.md":
+        return False
     return (
         _is_docs(p)
         or p in _ROOT_NPM

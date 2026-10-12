@@ -403,7 +403,9 @@ def _preview_process_manage(args: dict, _max_len: int) -> str | None:
 def _preview_todo_list(args: dict, _max_len: int) -> str:
     todos_arg = args.get("todos")
     verb = t("display.preview.todo_verb_updating" if args.get("merge", False) else "display.preview.todo_verb_planning")
-    return t("display.preview.todo_reading") if todos_arg is None else t("display.preview.todo_tasks", verb=verb, count=len(todos_arg))
+    if todos_arg is None:
+        return t("display.preview.todo_reading")
+    return t("display.preview.todo_tasks", verb=verb, count=len(todos_arg) if isinstance(todos_arg, list) else 0)
 
 
 def _preview_shell(key: str):
@@ -422,16 +424,16 @@ def _preview_read_file(args: dict, max_len: int) -> str | None:
 def _preview_memory(args: dict, _max_len: int) -> str:
     action, target = args.get("action", ""), args.get("target", "")
     if action == "add":
-        return f"+{target}: \"{_clip(_oneline(args.get('content', '')), 25)}\""
+        return f"+{target}: \"{_clip(_oneline(str(args.get('content') or '')), 25)}\""
     if action in ("replace", "remove"):
-        old = _oneline(args.get("old_text") or "") or t("display.preview.missing_old_text")
+        old = _oneline(str(args.get("old_text") or "")) or t("display.preview.missing_old_text")
         return f"{'~' if action == 'replace' else '-'}{target}: \"{old[:20]}\""
     return action
 
 
 def _preview_send_message(args: dict, _max_len: int) -> str:
     return t("display.preview.send_message_to", target=args.get("target", "?"),
-             message=_tail_trunc(_oneline(args.get("message", "")), 20))
+             message=_tail_trunc(_oneline(str(args.get("message") or "")), 20))
 
 
 def _preview_skill_view(args: dict, max_len: int) -> str | None:

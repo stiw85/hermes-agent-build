@@ -53,7 +53,17 @@ _OP_MARKERS: list[tuple[OperationType, re.Pattern]] = [
     (OperationType.ADD, re.compile(r'\*\*\*\s*Add\s+File:\s*(.+)')),
     (OperationType.DELETE, re.compile(r'\*\*\*\s*Delete\s+File:\s*(.+)')),
     (OperationType.MOVE, re.compile(r'\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+)'))]
-_HINT_RE = re.compile(r'@@\s*(.+?)\s*@@')
+# The closing ``@@`` is optional: the native apply_patch header is ``@@ def scope():``.
+_HINT_RE = re.compile(r'@@\s*(.*?)\s*(?:@@\s*)?$')
+_EOF_MARKER = re.compile(r'^\*\*\*\s*End\s+of\s+File\s*$')
+
+
+def _hunk_line(line: str) -> Optional[HunkLine]:
+    """A ``+``/``-``/space-prefixed line, an implicit context line, or None for the
+    ``\\ No newline at end of file`` marker."""
+    if line[0] in '+- ':
+        return HunkLine(line[0], line[1:])
+    return None if line[0] == '\\' else HunkLine(' ', line)
 
 
 def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], Optional[str]]:
@@ -71,6 +81,7 @@ def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], Optional[
     operations: list[PatchOperation] = []
     current_op: Optional[PatchOperation] = None
     current_hunk: Optional[Hunk] = None
+    pending_blanks = 0  # empty lines seen inside a hunk, kept only if the hunk goes on
 
     def _flush_hunk() -> None:
         if current_op and current_hunk and current_hunk.lines:
@@ -86,6 +97,7 @@ def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], Optional[
         if op_match:
             kind, m = op_match
             _flush()
+            pending_blanks = 0
             current_op = PatchOperation(
                 operation=kind,
                 file_path=m.group(1).strip(),
@@ -97,17 +109,23 @@ def parse_v4a_patch(patch_content: str) -> tuple[list[PatchOperation], Optional[
                 operations.append(current_op)
                 current_op = None
         elif line.startswith('@@'):
+            pending_blanks = 0
             if current_op:
                 _flush_hunk()
                 hint_match = _HINT_RE.match(line)
-                current_hunk = Hunk(context_hint=hint_match.group(1) if hint_match else None)
-        elif current_op and line:
+                current_hunk = Hunk(context_hint=(hint_match.group(1) or None) if hint_match else None)
+        elif not line:
+            pending_blanks += bool(current_hunk and current_hunk.lines)
+        elif current_op and not _EOF_MARKER.match(line) and (hunk_line := _hunk_line(line)):
             if current_hunk is None:
                 current_hunk = Hunk()
-            if line[0] in '+- ':
-                current_hunk.lines.append(HunkLine(line[0], line[1:]))
-            elif line[0] != '\\':  # "\ No newline at end of file" marker is skipped
-                current_hunk.lines.append(HunkLine(' ', line))  # implicit context line
+            if pending_blanks:
+                # Between two added lines an empty line is an added blank line; elsewhere
+                # it is blank context whose lone leading space was stripped in transit.
+                added = hunk_line.prefix == '+' and current_hunk.lines[-1].prefix == '+'
+                current_hunk.lines.extend(HunkLine('+' if added else ' ', '') for _ in range(pending_blanks))
+                pending_blanks = 0
+            current_hunk.lines.append(hunk_line)
     _flush()
     parse_errors: list[str] = []
     for op in operations:
@@ -146,10 +164,29 @@ def _hint_ambiguity(content: str, hint: str, tail: str = "") -> tuple[int, str]:
     return n, f"context hint '{hint}' is ambiguous ({n} occurrences){tail}" if n > 1 else ""
 
 
+def _replace_hunk(content: str, hunk: Hunk, search_pattern: str,
+                  replacement: str) -> tuple[str, int, Optional[str]]:
+    """Fuzzy-replace one hunk -> ``(content, count, error)``. A miss on the whole file
+    (ambiguous or not found) is retried inside a window around the hunk's context hint.
+    Shared by validation and apply so the two phases cannot disagree."""
+    from tools.fuzzy_match import fuzzy_find_and_replace
+    new_content, count, _strategy, error = fuzzy_find_and_replace(
+        content, search_pattern, replacement, replace_all=False)
+    hint_pos = content.find(hunk.context_hint) if error and hunk.context_hint else -1
+    if hint_pos != -1:
+        window_start = max(0, hint_pos - 500)
+        window_end = min(len(content), hint_pos + 2000)
+        window_new, window_count, _strategy, _window_error = fuzzy_find_and_replace(
+            content[window_start:window_end], search_pattern, replacement, replace_all=False)
+        if window_count > 0:
+            return content[:window_start] + window_new + content[window_end:], window_count, None
+    return new_content, count, error
+
+
 def _validate_operations(operations: list[PatchOperation], file_ops: Any) -> list[str]:
     """Dry-run every operation -> error strings (empty = safe). UPDATE hunks are simulated in
     order so later hunks see post-earlier-hunk content, exactly as apply will."""
-    from tools.fuzzy_match import fuzzy_find_and_replace, is_already_applied
+    from tools.fuzzy_match import is_already_applied
     errors: list[str] = []
     real_change_count = 0
     # Overlay so inter-op state validates (a MOVE creating the path a later UPDATE targets).
@@ -202,8 +239,7 @@ def _validate_operations(operations: list[PatchOperation], file_ops: Any) -> lis
                         errors.append(f"{op.file_path}: addition-only hunk {ambiguous}")
                 continue
             search_pattern, replacement = '\n'.join(search_lines), '\n'.join(replace_lines)
-            new_simulated, count, _strategy, match_error = fuzzy_find_and_replace(
-                simulated, search_pattern, replacement, replace_all=False)
+            new_simulated, count, match_error = _replace_hunk(simulated, hunk, search_pattern, replacement)
             if count:
                 simulated = new_simulated
             elif not is_already_applied(simulated or "", search_pattern, replacement):
@@ -403,12 +439,13 @@ def _insert_addition_only(new_content: str, hunk: Hunk, insert_text: str) -> tup
                 return new_content + '\n' + insert_text, None
             return new_content[:eol + 1] + insert_text + '\n' + new_content[eol + 1:], None
     # No hint / hint not found — append at end as a safe fallback.
-    return new_content.rstrip('\n') + '\n' + insert_text + '\n', None
+    separator = '' if not new_content or new_content.endswith('\n') else '\n'
+    return new_content + separator + insert_text + '\n', None
 
 
 def _apply_update(op: PatchOperation, file_ops: Any) -> ApplyResult:
     """Apply each hunk via fuzzy replace, then write once."""
-    from tools.fuzzy_match import fuzzy_find_and_replace, is_already_applied
+    from tools.fuzzy_match import is_already_applied
     read_result = file_ops.read_file_raw(op.file_path)  # raw: no line numbers / truncation
     if read_result.error:
         return _fail(f"Cannot read file: {read_result.error}")
@@ -423,20 +460,7 @@ def _apply_update(op: PatchOperation, file_ops: Any) -> ApplyResult:
             if err:
                 return _fail(err)
             continue
-        new_content, count, _strategy, error = fuzzy_find_and_replace(
-            new_content, search_pattern, replacement, replace_all=False)
-        if not (error and count == 0):
-            continue
-        # Retry inside a window around the context hint, if any.
-        hint_pos = new_content.find(hunk.context_hint) if hunk.context_hint else -1
-        if hint_pos != -1:
-            window_start = max(0, hint_pos - 500)
-            window_end = min(len(new_content), hint_pos + 2000)
-            window_new, count, _strategy, error = fuzzy_find_and_replace(
-                new_content[window_start:window_end], search_pattern, replacement, replace_all=False)
-            if count > 0:
-                new_content = new_content[:window_start] + window_new + new_content[window_end:]
-                error = None
+        new_content, _count, error = _replace_hunk(new_content, hunk, search_pattern, replacement)
         if error:
             # Mirror validation's already-applied skip, else the two phases disagree and fail here.
             if is_already_applied(new_content, search_pattern, replacement):

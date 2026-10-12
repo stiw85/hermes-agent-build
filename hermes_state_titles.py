@@ -28,10 +28,12 @@ def next_title_in_lineage(conn, base_title: str) -> str:
     rows = conn.execute(
         "SELECT title FROM sessions WHERE title = ? OR title LIKE ? ESCAPE '\\'",
         (base, f"{_escape_like(base)} #%")).fetchall()
-    if not rows:
+    # Only ``base #<digits>`` is a sibling: "base #12 crash" is another conversation's title.
+    numbers = [int(m.group(2)) for m in (_NUMBERED_TITLE_RE.match(row[0]) for row in rows)
+               if m and m.group(1) == base]
+    if not numbers and all(row[0] != base for row in rows):
         return base
     # The unnumbered original counts as #1.
-    numbers = [int(m.group(2)) for m in (_NUMBERED_TITLE_RE.match(row[0]) for row in rows) if m]
     return f"{base} #{max([1, *numbers]) + 1}"
 
 
@@ -203,11 +205,13 @@ class SessionTitlesMixin:
         # silently routes teammates' messages into a chat whose bot cannot answer back.
         if exact is not None and title == self.CANONICAL_BOT_CHAT_TITLE:
             return exact["id"]
-        # Escape LIKE wildcards so "%"/"_" in titles cannot false-match.
-        numbered = self._read_all(
+        # Escape LIKE wildcards so "%"/"_" in titles cannot false-match; the suffix must be a
+        # number, or "Review PR #4521 feedback" would hijack a resume of "Review PR".
+        numbered = [row for row in self._read_all(
             "SELECT id, title, started_at FROM sessions "
             "WHERE title LIKE ? ESCAPE '\\' ORDER BY started_at DESC",
             (f"{_escape_like(title)} #%",))
+            if (m := _NUMBERED_TITLE_RE.match(row["title"])) and m.group(1) == title]
         return numbered[0]["id"] if numbered else (exact["id"] if exact else None)
 
     def get_next_title_in_lineage(self, base_title: str) -> str:

@@ -317,7 +317,7 @@ def _install_new_skill(st: _SyncState, skill_name: str, skill_src: Path, dest: P
             else:
                 st.say(
                     f"  ⚠ {skill_name}: bundled version shipped but you already have a local skill "
-                    f"by this name — yours was kept. Run `hermes skills reset {skill_name}` to "
+                    f"by this name — yours was kept. Run `hermes skills reset {skill_name} --restore` to "
                     f"replace it with the bundled version.")
         else:
             _copy_dir(skill_src, dest)

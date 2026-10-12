@@ -31,6 +31,8 @@ from pathlib import Path
 from hermes_constants import get_hermes_home
 from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM, FIRE_CLAIM_SKEW_SECONDS, FIRE_CLAIM_TTL_SECONDS
 from cron.env_settings import cron_env_setting
+from cron.repeat_budget import rederive_repeat_for_schedule_change
+from cron.wall_clock import attach_zone, wall_zone
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import store_health
 from typing import Optional, Dict, List, Any, Callable, Set, Tuple, Union, Collection
@@ -781,6 +783,8 @@ def _cron_schedule(
 
 
 def _interval_schedule(minutes: int) -> dict[str, Any]:
+    if minutes < 1:  # 0 is due on every tick
+        raise ValueError("Interval must be at least 1 minute.")
     return {"kind": "interval", "minutes": minutes, "display": f"every {minutes}m"}
 
 
@@ -813,27 +817,6 @@ def parse_schedule(schedule: str) -> dict[str, Any]:
         return _cron_schedule(
             schedule, schedule, "Cron expressions require 'croniter' package.", "cron expression")
 
-    # ISO timestamp (contains T or looks like date)
-    if 'T' in schedule or re.match(r'^\d{4}-\d{2}-\d{2}', schedule):
-        try:
-            dt = datetime.fromisoformat(schedule)
-            # Naive timestamps become aware in the CONFIGURED Hermes timezone (not server-local):
-            # the due-check compares against hermes_time.now().
-            # Make naive timestamps timezone-aware at parse time so the stored value doesn't depend on the
-            # system timezone matching at check time. UTC) while now() runs in Asia/Kolkata, the stored
-            # instant would land hours off from the user's wall-clock intent — far enough that one-shots
-            # never become due and recurring jobs fire at the wrong time. Using the configured zone makes
-            # "20:07" mean 20:07 on the same clock the scheduler checks against (#51021).
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=_hermes_now().tzinfo)
-            return {
-                "kind": "once",
-                "run_at": dt.isoformat(),
-                "display": f"once at {dt.strftime('%Y-%m-%d %H:%M')}"
-            }
-        except ValueError as e:
-            raise ValueError(f"Invalid timestamp '{schedule}': {e}")
-
     # "in 30m"/"in 2h" is the explicit one-shot-by-duration form; a bare duration ("30m") is a
     # RECURRING interval per the documented tool contract.
     if schedule_lower.startswith("in "):
@@ -849,6 +832,27 @@ def parse_schedule(schedule: str) -> dict[str, Any]:
         return {"kind": "once", "run_at": run_at.isoformat(), "display": f"once in {duration_str}"}
     with contextlib.suppress(ValueError):
         return _interval_schedule(parse_duration(schedule))
+
+    # ISO timestamp (contains T or looks like date)
+    if 'T' in schedule or re.match(r'^\d{4}-\d{2}-\d{2}', schedule):
+        try:
+            dt = datetime.fromisoformat(schedule)
+            # Naive timestamps become aware in the CONFIGURED Hermes timezone (not server-local):
+            # the due-check compares against hermes_time.now().
+            # Make naive timestamps timezone-aware at parse time so the stored value doesn't depend on the
+            # system timezone matching at check time. UTC) while now() runs in Asia/Kolkata, the stored
+            # instant would land hours off from the user's wall-clock intent — far enough that one-shots
+            # never become due and recurring jobs fire at the wrong time. Using the configured zone makes
+            # "20:07" mean 20:07 on the same clock the scheduler checks against (#51021).
+            if dt.tzinfo is None:
+                dt = attach_zone(dt, wall_zone(_hermes_now()))
+            return {
+                "kind": "once",
+                "run_at": dt.isoformat(),
+                "display": f"once at {dt.strftime('%Y-%m-%d %H:%M')}"
+            }
+        except ValueError as e:
+            raise ValueError(f"Invalid timestamp '{schedule}': {e}")
 
     raise ValueError(
         f"Invalid schedule '{original}'. Use:\n"
@@ -1214,8 +1218,8 @@ def compute_next_run(schedule: dict[str, Any], last_run_at: Optional[str] = None
         # wall clock for croniter, then re-attach the zone to the result, so
         # the wall-clock hour stays correct every calendar day, including DST
         # boundaries (morning-routine 09:00 America/Toronto).
-        # Fall back to the base's own zone only when nothing is configured.
-        zone = get_timezone() or base_time.tzinfo
+        # Nothing configured: the OS zone rules for server-local time, else the base's own zone.
+        zone = get_timezone() or wall_zone(now, base_time.tzinfo)
         base_wall = base_time.astimezone(zone).replace(tzinfo=None)
         it = croniter(expr, base_wall)
         # Strictly-after guard for the DST fall-back hour (qwen-code#11723 class):
@@ -1229,11 +1233,11 @@ def compute_next_run(schedule: dict[str, Any], last_run_at: Optional[str] = None
         next_wall = it.get_next(datetime)
         for _ in range(2):
             for fold in (0, 1):
-                candidate = next_wall.replace(tzinfo=zone, fold=fold)
+                candidate = attach_zone(next_wall.replace(fold=fold), zone)
                 if candidate.timestamp() > base_ts:
                     return candidate.isoformat()
             next_wall = it.get_next(datetime)
-        return next_wall.replace(tzinfo=zone).isoformat()
+        return attach_zone(next_wall, zone).isoformat()
     return None
 
 
@@ -2045,38 +2049,6 @@ def _normalize_job_updates(job: dict[str, Any], updates: dict[str, Any]) -> None
             updates["repeat"] = {"times": normalize_repeat_value(_rp), "completed": completed}
 
 
-def _rederive_repeat_for_schedule_change(
-    job: dict[str, Any], updates: dict[str, Any]
-) -> None:
-    """Re-derive the ``repeat`` default when a schedule update flips the kind.
-
-    ``create_job`` derives it from the schedule kind (once -> 1, recurring -> forever); the update
-    path must honour the same contract, otherwise a one-shot turned recurring keeps its ``times=1``
-    budget and retires after one fire, while a recurring job turned one-shot never completes. An
-    explicit ``repeat`` in the same update wins; a same-kind schedule edit leaves ``repeat`` alone.
-    """
-    if "schedule" not in updates or "repeat" in updates:
-        return
-    new_schedule = updates["schedule"]
-    if isinstance(new_schedule, str):
-        new_schedule = parse_schedule(new_schedule)
-        updates["schedule"] = new_schedule
-    old_kind = (job.get("schedule") or {}).get("kind")
-    new_kind = new_schedule.get("kind")
-    if old_kind == new_kind:
-        return
-    repeat = dict(job.get("repeat") or {})
-    times = repeat.get("times")
-    if new_kind == "once" and times is None:
-        repeat["times"] = 1
-    elif new_kind != "once" and old_kind == "once" and times == 1:
-        repeat["times"] = None
-    else:
-        return
-    repeat.setdefault("completed", 0)
-    updates["repeat"] = repeat
-
-
 def _apply_schedule_update(updated: dict[str, Any], updates: dict[str, Any], job_id: str) -> None:
     """Parse a string schedule, refresh ``schedule_display`` and (unless paused) ``next_run_at``."""
     updated_schedule = updated["schedule"]
@@ -2116,7 +2088,7 @@ def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]
         raise ValueError(f"Cron job field(s) cannot be updated: {', '.join(sorted(bad_fields))}")
 
     def apply(jobs, i, job):
-        _rederive_repeat_for_schedule_change(job, updates)
+        rederive_repeat_for_schedule_change(job, updates)
         _normalize_job_updates(job, updates)
         _apply_pin_update(job, updates)
         updated = _apply_skill_fields({**job, **updates})

@@ -210,7 +210,8 @@ class SubdirectoryHintTracker:
             if not p.is_absolute():
                 p = self.working_dir / p
             p = p.resolve()
-            if p.suffix or (p.exists() and p.is_file()):
+            # A suffix marks a not-yet-written file; an existing ``conf.d`` / ``next.js`` is a directory.
+            if p.is_file() or (p.suffix and not p.is_dir()):
                 p = p.parent
             for _ in range(_MAX_ANCESTOR_WALK):
                 if p in self._loaded_dirs:

@@ -640,14 +640,14 @@ class BatchRunner:
             config[key] = getattr(self, key)
         return config
 
-    def _run_pool(self, config, checkpoint_data, completed_prompts_set, checkpoint_lock) -> list[dict[str, Any]]:
-        """Process all batches in a worker pool, checkpointing after each result."""
+    def _run_pool(self, config, checkpoint_data, completed_prompts_set, checkpoint_lock, skip_indices) -> list[dict[str, Any]]:
+        """Process all batches in a worker pool (workers skip *skip_indices*), checkpointing after each result."""
         print(f"\n🔧 Initializing {self.num_workers} worker processes...")
 
         with Pool(processes=self.num_workers) as pool:
             # output_dir as str for pickling
             tasks = [
-                (batch_num, batch_data, str(self.output_dir), completed_prompts_set, config)
+                (batch_num, batch_data, str(self.output_dir), skip_indices, config)
                 for batch_num, batch_data in enumerate(self.batches)
             ]
             print(f"✅ Created {len(tasks)} batch tasks")
@@ -813,7 +813,10 @@ class BatchRunner:
 
         # Checkpoint writes happen in the parent process; keep a lock for safety.
         checkpoint_lock = Lock()
-        results = self._run_pool(config, checkpoint_data, completed_prompts_set, checkpoint_lock)
+        # A resume already dropped completed rows by content; the checkpoint's indices describe the
+        # dataset order of the run that wrote them and would veto rows that moved onto them.
+        skip_indices = set() if resume else completed_prompts_set
+        results = self._run_pool(config, checkpoint_data, completed_prompts_set, checkpoint_lock, skip_indices)
         total_tool_stats = {}
         total_reasoning_stats = dict.fromkeys(_REASONING_KEYS, 0)
         for batch_result in results:

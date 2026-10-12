@@ -50,10 +50,15 @@ def _get_sessions_dir() -> Path:
 
 
 def _read_state_db_mtime() -> float:
-    try:
-        return (_hermes_home() / "state.db").stat().st_mtime
-    except OSError:  # missing file included
-        return 0.0
+    """Newest mtime of state.db and its WAL: a WAL-mode commit only touches the sidecar until a checkpoint."""
+    db = _hermes_home() / "state.db"
+    latest = 0.0
+    for path in (db, db.with_name(db.name + "-wal")):
+        try:
+            latest = max(latest, path.stat().st_mtime)
+        except OSError:  # missing file included
+            pass
+    return latest
 
 
 def _read_json(path: Path):
@@ -314,16 +319,15 @@ class EventBridge:
     def wait_for_event(self, after_cursor: int = 0, session_key: Optional[str] = None, timeout_ms: int = 30000) -> Optional[dict]:
         """Block until a matching event arrives or timeout expires."""
         deadline = time.monotonic() + (timeout_ms / 1000.0)
-        while time.monotonic() < deadline:
+        while True:  # checked before the deadline: a zero timeout still returns a queued event
             found = self._matching(after_cursor, session_key, 1)
             if found:
                 return found[0]
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                break
+                return None
             self._new_event.clear()
             self._new_event.wait(timeout=min(remaining, POLL_INTERVAL))
-        return None
 
     def list_pending_approvals(self) -> list[dict]:
         """List approval requests observed during this bridge session."""

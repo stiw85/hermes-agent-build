@@ -345,6 +345,12 @@ describe('fmtDuration', () => {
     expect(fmtDuration(59.4)).toBe('59s')
   })
 
+  it('carries a rounded-up second into the minute', () => {
+    expect(fmtDuration(59.5)).toBe('1m')
+    expect(fmtDuration(119.6)).toBe('2m')
+    expect(fmtDuration(3599.7)).toBe('60m')
+  })
+
   it('formats whole minutes without trailing seconds', () => {
     expect(fmtDuration(60)).toBe('1m')
     expect(fmtDuration(180)).toBe('3m')

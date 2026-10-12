@@ -17,6 +17,17 @@ describe('shortCwd', () => {
     expect(shortCwd('/Users/bb/proj/repo')).toBe('~/proj/repo')
   })
 
+  it('leaves a sibling that only shares the HOME prefix alone', () => {
+    expect(shortCwd('/Users/bbq/proj')).toBe('/Users/bbq/proj')
+  })
+
+  it('collapses HOME written with a trailing slash', () => {
+    process.env.HOME = '/Users/bb/'
+
+    expect(shortCwd('/Users/bb/proj')).toBe('~/proj')
+    expect(shortCwd('/Users/bb')).toBe('~')
+  })
+
   it('leaves non-HOME paths alone', () => {
     expect(shortCwd('/tmp/work')).toBe('/tmp/work')
   })

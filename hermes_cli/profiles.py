@@ -306,10 +306,14 @@ def _wrapper_path(alias: str) -> Path:
     return _get_wrapper_dir() / (f"{alias}.bat" if sys.platform == "win32" else alias)
 
 
+# The POSIX wrapper shell-quotes the executable path: a space in it puts a quote before `` -p``.
+_WRAPPER_PROFILE_RE = re.compile(r"hermes['\"]? -p (\S+)")
+
+
 def _is_our_wrapper(path: Path) -> bool:
-    """True when *path* reads as a Hermes-generated wrapper (contains ``hermes -p``)."""
+    """True when *path* reads as a Hermes-generated wrapper (contains ``hermes -p <profile>``)."""
     try:
-        return "hermes -p" in path.read_text(encoding="utf-8-sig")
+        return _WRAPPER_PROFILE_RE.search(path.read_text(encoding="utf-8-sig")) is not None
     except Exception:
         return False
 
@@ -621,7 +625,6 @@ def build_alias_map() -> dict[str, str]:
     if not wrapper_dir.is_dir():
         return result
     is_windows = sys.platform == "win32"
-    prefix = "hermes -p "
     for entry in sorted(wrapper_dir.iterdir()):
         if not entry.is_file():
             continue
@@ -635,15 +638,10 @@ def build_alias_map() -> dict[str, str]:
                 content = f.read(_WRAPPER_READ_LIMIT)
         except (OSError, UnicodeDecodeError):
             continue  # UnicodeDecodeError = a binary on PATH, not a wrapper
-        idx = content.find(prefix)
-        if idx == -1:
+        match = _WRAPPER_PROFILE_RE.search(content)
+        if match is None:
             continue
-        rest = content[idx + len(prefix):]
-        # Profile id is the first whitespace-delimited token after the flag.
-        canon = rest.split(None, 1)[0].strip() if rest.strip() else ""
-        if not canon:
-            continue
-        canon = normalize_profile_name(canon)
+        canon = normalize_profile_name(match.group(1))  # first whitespace-delimited token after the flag
         alias = entry.stem if is_windows else entry.name
         if alias == canon:
             result.setdefault(canon, alias)  # never overwrite a custom alias already found
@@ -2364,6 +2362,7 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
         from hermes_cli.setup_profile import release_setup_copy, setup_marker_state
         release_setup_copy(final_source, setup_state=setup_marker_state(final_source))
         shutil.move(str(final_source), str(profile_dir))
+    clear_named_profile_deleted(profile_dir)  # restoring over a deleted name: same as create_profile
     return profile_dir
 
 
@@ -2495,6 +2494,7 @@ def rename_profile(old_name: str, new_name: str) -> Path:
             print(f"⚠ The gateway service was removed. Reinstall it with: hermes -p {old_canon} gateway install")
         raise
     print(f"✓ Renamed {old_dir.name} → {new_dir.name}")
+    clear_named_profile_deleted(new_dir)  # a name freed by an earlier delete must not stay tombstoned
     # The tombstone lives at profiles/.deleted/<old_name>; old_dir is gone so nothing can
     # resurrect it, and a future profile reusing the old name must not read as deleted.
     if live_mux:

@@ -53,10 +53,15 @@ def _calculate_line_positions(content_lines: list[str], start_line: int,
 
 def _window_spans(content: str, content_lines: list[str], n: int,
                   accept: Callable[[int], bool]) -> list[Span]:
-    """Spans of every ``n``-line window starting at ``i`` for which ``accept(i)``."""
-    return [
-        _calculate_line_positions(content_lines, i, i + n, len(content))
-        for i in range(len(content_lines) - n + 1) if accept(i)]
+    """Spans of the ``n``-line windows starting at ``i`` for which ``accept(i)``, left to
+    right and non-overlapping (like ``_strategy_exact``: overlapping spans cannot be spliced)."""
+    spans: list[Span] = []
+    next_free = 0
+    for i in range(len(content_lines) - n + 1):
+        if i >= next_free and accept(i):
+            spans.append(_calculate_line_positions(content_lines, i, i + n, len(content)))
+            next_free = i + n
+    return spans
 
 
 def _match_transformed_lines(content: str, pattern: str,
@@ -126,16 +131,17 @@ def _map_normalized_positions(original: str, normalized: str,
     orig_to_norm = []  # orig_to_norm[i] = position in normalized
     orig_idx = norm_idx = 0
     while orig_idx < len(original) and norm_idx < len(normalized):
-        if original[orig_idx] == normalized[norm_idx]:
+        if original[orig_idx] in ' \t' and normalized[norm_idx] == ' ':
+            # Collapsed run: every char of it maps to the one normalized space, so a
+            # match starting after the run starts at its own first char, not inside it.
+            orig_to_norm.append(norm_idx)
+            orig_idx += 1
+            if orig_idx >= len(original) or original[orig_idx] not in ' \t':
+                norm_idx += 1
+        elif original[orig_idx] == normalized[norm_idx]:
             orig_to_norm.append(norm_idx)
             orig_idx += 1
             norm_idx += 1
-        elif original[orig_idx] in ' \t' and normalized[norm_idx] == ' ':
-            # Collapsed run: advance norm_idx only once the run is consumed.
-            orig_to_norm.append(norm_idx)
-            orig_idx += 1
-            if orig_idx < len(original) and original[orig_idx] not in ' \t':
-                norm_idx += 1
         else:
             # Extra whitespace in original, or a mismatch normalization should
             # never produce — either way, pin to the current norm_idx.

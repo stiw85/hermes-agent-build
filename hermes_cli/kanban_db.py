@@ -2001,8 +2001,8 @@ def _synthesize_ended_run(
 # --- Dependency resolution (todo -> ready) ---
 
 def _has_sticky_block(conn: sqlite3.Connection, task_id: str) -> bool:
-    """True when the newest ``blocked``/``unblocked``/``gave_up`` event says the
-    block must wait for an operator: an explicit ``kanban_block`` (#28712), or a
+    """True when the newest ``blocked``/``gave_up`` event since the last operator
+    release (``unblocked``, ``promoted_manual``) says the block must wait for one: an explicit ``kanban_block`` (#28712), or a
     breaker trip ``_record_task_failure`` stamped ``sticky`` — the clean-exit
     protocol-violation budget or a systemic same-error wave. Those trip on a
     policy independent of ``consecutive_failures``, so ``recompute_ready``'s
@@ -2014,7 +2014,7 @@ def _has_sticky_block(conn: sqlite3.Connection, task_id: str) -> bool:
     """
     row = conn.execute(
         "SELECT kind FROM task_events "
-        "WHERE task_id = ? AND kind IN ('blocked', 'unblocked') "
+        "WHERE task_id = ? AND kind IN ('blocked', 'unblocked', 'promoted_manual') "
         "ORDER BY id DESC LIMIT 1", (task_id,),
     ).fetchone()
     if row and row["kind"] == "blocked":
@@ -2022,7 +2022,7 @@ def _has_sticky_block(conn: sqlite3.Connection, task_id: str) -> bool:
     trip = conn.execute(
         "SELECT payload FROM task_events "
         "WHERE task_id = ? AND kind = 'gave_up' AND id > COALESCE("
-        "  (SELECT MAX(id) FROM task_events WHERE task_id = ? AND kind = 'unblocked'), 0) "
+        "  (SELECT MAX(id) FROM task_events WHERE task_id = ? AND kind IN ('unblocked', 'promoted_manual')), 0) "
         "ORDER BY id DESC LIMIT 1", (task_id, task_id),
     ).fetchone()
     return bool(trip) and bool(_json_dict(trip["payload"]).get("sticky"))
@@ -3858,14 +3858,14 @@ def archive_task(conn: sqlite3.Connection, task_id: str, *, signal_fn=None) -> b
 def _delete_task_relations(conn: sqlite3.Connection, task_id: str) -> None:
     """Delete every row referencing ``task_id`` (schema has no ON DELETE CASCADE)."""
     conn.execute("DELETE FROM task_links WHERE parent_id = ? OR child_id = ?", (task_id, task_id))
-    for table in ("task_comments", "task_events", "task_runs", "kanban_notify_subs"):
+    for table in ("task_comments", "task_events", "task_runs", "task_attachments", "kanban_notify_subs"):
         conn.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
 
 
 def delete_archived_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """Hard-delete an ARCHIVED task (+ related rows); anything else must be
     archived first so data loss takes two deliberate actions."""
-    with write_txn(conn):
+    with _purging_attachment_blobs(conn, task_id), write_txn(conn):
         if _task_status(conn, task_id) != "archived":
             return False
         _delete_task_relations(conn, task_id)
@@ -3875,7 +3875,7 @@ def delete_archived_task(conn: sqlite3.Connection, task_id: str) -> bool:
 
 def delete_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """Hard-delete a task and its related rows in one txn; False when not found."""
-    with write_txn(conn):
+    with _purging_attachment_blobs(conn, task_id), write_txn(conn):
         cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         if cur.rowcount != 1:
             return False
@@ -4279,11 +4279,10 @@ def read_worker_log(
         with open(path, "rb") as f:
             if size > tail_bytes:
                 f.seek(size - tail_bytes)
-                # Skip the partial first line unless the window has no newline
-                # at all (readline() would eat everything).
-                probe = f.tell()
-                if not f.readline().endswith(b"\n") and f.tell() >= size:
-                    f.seek(probe)
+                # Skip the partial first line, unless the window is all one line (nothing would be left).
+                f.readline()
+                if f.tell() >= size:
+                    f.seek(size - tail_bytes)
             return f.read().decode("utf-8", errors="replace")
     except OSError:
         return None
@@ -4433,6 +4432,7 @@ from hermes_cli.kanban_db_workspace import (
     _cleanup_workspace,
     _is_managed_scratch_path,
     _managed_scratch_path_info,
+    _purging_attachment_blobs,
     _scratch_workspace,
 )
 from hermes_cli.kanban_db_dispatch import (

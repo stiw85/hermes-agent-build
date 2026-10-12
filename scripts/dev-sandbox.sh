@@ -122,12 +122,6 @@ if [ -n "$SEED_DIR" ]; then
   SEED_DIR="$(cd "$SEED_DIR" && pwd)"
 fi
 
-if [ "$#" -eq 0 ]; then
-  print_help >&2
-  exit 1
-fi
-
-
 SANDBOX_DIR_NAME="${HERMES_DEV_SANDBOX_DIR:-$DEFAULT_DIR}"
 GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR/..")"
 GIT_ROOT="$(cd "$GIT_ROOT" && pwd)"
@@ -150,6 +144,11 @@ if [ "$DELETE" = true ]; then
     echo "[sandbox] nothing to delete at $PERSISTENT_SANDBOX_ROOT" >&2
   fi
   exit 0
+fi
+
+if [ "$#" -eq 0 ]; then
+  print_help >&2
+  exit 1
 fi
 
 # Derive a per-worktree app name so multiple checkouts don't collide.
@@ -201,8 +200,9 @@ if [ "$PERSISTENT" = false ]; then
     chmod -R u+w "$SANDBOX_ROOT"
     rm -rf -- "$SANDBOX_ROOT"
   }
+  # The EXIT trap is the one cleanup: a second run would fail on the removed dir.
   trap cleanup EXIT
-  trap 'cleanup; exit 130' INT TERM
+  trap 'exit 130' INT TERM
 fi
 
 "$@"
