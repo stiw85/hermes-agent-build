@@ -128,8 +128,8 @@ def backtest(
     downside = net[net < 0]
     dsd = float(np.sqrt(np.mean(downside**2))) if len(downside) else 0.0
     sortino = mean / dsd * math.sqrt(ppy) if dsd > 0 else 0.0
-    peak = equity.cummax()
-    mdd = float(((peak - equity) / peak).max())
+    peak = np.maximum.accumulate(np.concatenate([[1.0], equity.to_numpy()]))[1:]  # start from initial capital
+    mdd = float(((peak - equity.to_numpy()) / peak).max())
 
     trades = _trade_returns(pos, strat_ret, cost)
     wins = [t for t in trades if t > 0]
@@ -157,7 +157,7 @@ def backtest(
 
 def buy_and_hold(df: pd.DataFrame, timeframe: str = "1h", asset_class: str = "crypto") -> dict[str, float]:
     eq = df["close"] / df["close"].iloc[0]
-    peak = eq.cummax()
+    peak = eq.cummax()  # eq starts at exactly 1.0
     r = eq.pct_change().dropna()
     ppy = periods_per_year(timeframe, asset_class)
     return {

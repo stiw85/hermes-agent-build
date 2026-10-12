@@ -14,6 +14,7 @@ broker:
   slippage_bps: 5
   exchange: binance    # ccxt id: binance, bybit, kraken, okx, coinbase, ...
   sandbox: true
+  paper: true          # alpaca: must be false (plus the env latch) for mode: live
   stock_feed: iex      # alpaca: iex (free) | sip (paid)
   crypto_feed: us
   csv_dir: ./data/csv
@@ -48,6 +49,7 @@ llm:
   model: nousresearch/hermes-4-70b
   api_key_env: LLM_API_KEY
   trade_review: true     # LLM may shrink or veto new risk, never enlarge it
+  on_review_error: reduce  # LLM down / garbage reply: reduce (half size) | veto | proceed
   max_tool_iterations: 12
 
 # ---- self-improvement -------------------------------------------------------------
@@ -60,6 +62,7 @@ improve:
   max_candidates: 60
   strategies: [sma_cross, ema_cross, rsi_reversion, donchian_breakout, bollinger_reversion, trend_rsi]
   reflect_after_trades: 10
+  promote_cooldown_hours: 24   # max one agent-requested promotion per symbol per window
 
 schedule:
   cycle_minutes: null    # null = every bar close of `timeframe`

@@ -12,7 +12,7 @@ from hermes_trader.agent import Agent, Lessons, Playbooks, Toolkit, make_reviewe
 from hermes_trader.book import StrategyBook
 from hermes_trader.brokers.paper import PaperBroker
 from hermes_trader.data import SyntheticData
-from hermes_trader.engine import Engine, closed_bars
+from hermes_trader.engine import Engine, closed_bars, review_multiplier
 from hermes_trader.improve import Candidate, Improver
 from hermes_trader.runtime import BUNDLED_PLAYBOOKS
 
@@ -107,14 +107,38 @@ def test_book_promote_and_rollback(tmp_path):
 
 def test_improver_gate(cfg):
     imp = Improver(cfg["improve"], fee_bps=10, slippage_bps=5, timeframe="1h", allow_short=False)
-    good = Candidate("x", {}, {}, {"trades": 20, "max_drawdown": 0.1, "sharpe": 1.5, "total_return": 0.1}, 1.5)
+    t = {"trades": 20, "max_drawdown": 0.1, "sharpe": 1.5, "total_return": 0.1}
+    good = Candidate("x", {}, {}, 1.0, t, 1.5)
     assert imp.gate(good, 1.0)[0]
     assert not imp.gate(good, 1.45)[0]  # not enough improvement
     assert imp.gate(good, -math.inf)[0]
-    few = Candidate("x", {}, {}, {**good.test, "trades": 2}, 1.5)
-    assert not imp.gate(few, 0)[0]
-    deep = Candidate("x", {}, {}, {**good.test, "max_drawdown": 0.5}, 1.5)
-    assert not imp.gate(deep, 0)[0]
+    assert not imp.gate(Candidate("x", {}, {}, 1.0, {**t, "trades": 2}, 1.5), 0)[0]
+    assert not imp.gate(Candidate("x", {}, {}, 1.0, {**t, "max_drawdown": 0.5}, 1.5), 0)[0]
+
+
+def test_search_never_sees_holdout(cfg):
+    imp = Improver(cfg["improve"], fee_bps=10, slippage_bps=5, timeframe="1h", allow_short=False)
+    df = make_df(1500, seed=11, vol=0.012)
+    garbage = df.copy()
+    split = imp.split(df)
+    garbage.iloc[split:] = garbage.iloc[split:] * 3.7  # wreck the holdout
+    def fresh():  # same sampling seed for both runs
+        return Improver(cfg["improve"], fee_bps=10, slippage_bps=5, timeframe="1h", allow_short=False)
+
+    a = [(c.strategy, c.params, c.train_score) for c in fresh().search("X/USDT", df)]
+    b = [(c.strategy, c.params, c.train_score) for c in fresh().search("X/USDT", garbage)]
+    assert a
+    assert a == b
+
+
+def test_random_walks_rarely_promote(cfg, tmp_path):
+    imp = Improver(cfg["improve"], fee_bps=10, slippage_bps=5, timeframe="1h", allow_short=False)
+    promoted = 0
+    for seed in range(12):
+        book = StrategyBook(tmp_path / f"b{seed}.yaml", cfg["default_strategy"])
+        df = make_df(2000, seed=100 + seed, trend=0.0, vol=0.01)
+        promoted += imp.run("X/USDT", df, book, promote=True).promoted
+    assert promoted <= 2, f"{promoted}/12 random walks promoted a strategy: gate is leaking"
 
 
 def test_improver_runs_and_promotes_only_through_gate(cfg, now):
@@ -128,6 +152,33 @@ def test_improver_runs_and_promotes_only_through_gate(cfg, now):
         assert rep.best.test["trades"] >= cfg["improve"]["min_trades"]
     else:
         assert eng.book.entry("BTC/USDT")["version"] == 0
+    assert all("holdout" not in c for c in d["leaderboard"][1:])  # only the chosen challenger is tested
+
+
+def test_stop_cooldown_survives_the_stop_cycle(cfg, now):
+    data = CrashData()
+    cfg.raw["risk"]["risk_per_trade_pct"] = 1.0
+    eng, *_ = build(cfg, now, data)
+    eng.cycle(now)
+    assert eng.broker.account(eng.symbols).positions
+    data.mult = 0.97  # small drop: below ATR stop, far from the kill switch
+    eng.cycle(now + timedelta(hours=1))
+    assert eng.journal.recent_events(kind="stop")
+    assert eng.cooldown, "cooldown must persist after the stop fires"
+    assert not eng.broker.account(eng.symbols).positions
+    eng.state.trades_today = 0
+    eng.state.start_of_day_equity = eng.broker.account(eng.symbols).equity
+    eng.cycle(now + timedelta(hours=2))  # strategy still long -> must NOT re-enter
+    assert not eng.broker.account(eng.symbols).positions
+
+
+def test_agent_promotions_rate_limited(cfg, now):
+    eng, imp, tk, _ = build(cfg, now)
+    args = {"symbol": "BTC/USDT", "strategy": "ema_cross", "params": {"fast": 8, "slow": 55}, "why": "t"}
+    first = tk.call("promote_strategy", args)
+    second = tk.call("promote_strategy", {**args, "params": {"fast": 12, "slow": 89}})
+    assert '"reason"' in first and "one promotion attempt" in second
+    assert eng.journal.recent_events(kind="promote_attempt")
 
 
 def test_lessons_budget(tmp_path):
@@ -188,11 +239,30 @@ def test_reviewer_cannot_enlarge(cfg, now):
     assert d["llm_verdict"] == "reduce"
 
 
-def test_reviewer_errors_fail_open(cfg, now):
+def test_reviewer_errors_trade_at_half_size_by_default(cfg, now):
     eng2, llm2, clock2 = _setup_reviewer(cfg, now, RuntimeError("provider down"))
     _run_until_trade(eng2, clock2, now)
     assert eng2.journal.rows("SELECT * FROM decisions WHERE llm_verdict='error'")
-    assert eng2.journal.recent_fills()  # trade still happened
+    f = eng2.journal.recent_fills()[0]
+    assert f["qty"] * f["price"] <= 0.5 * 0.2 * 10_000 * 1.01
+
+
+def test_review_multiplier_verdict_first():
+    assert review_multiplier("veto", None) == 0.0  # malformed size must not turn a veto into a trade
+    assert review_multiplier("veto", 1.0) == 0.0
+    assert review_multiplier("reduce", None) == 0.5
+    assert review_multiplier("reduce", 5) == 0.5
+    assert review_multiplier("reduce", 0.3) == 0.3
+    assert review_multiplier("approve", 9) == 1.0
+    with pytest.raises(ValueError):
+        review_multiplier("yolo", 1)
+
+
+def test_reviewer_veto_with_null_size_is_still_veto(cfg, now):
+    eng, llm, clock = _setup_reviewer(cfg, now, '{"verdict":"veto","size_mult":null}')
+    _run_until_trade(eng, clock, now)
+    assert eng.journal.rows("SELECT * FROM decisions WHERE llm_verdict='veto'")
+    assert not eng.journal.recent_fills()
 
 
 def test_agent_tool_loop_and_gated_promotion(cfg, now):

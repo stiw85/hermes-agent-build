@@ -23,6 +23,8 @@ def make_broker(cfg: Config) -> Broker:
 
         return CCXTBroker(b["exchange"], sandbox=not cfg.is_live, state_path=cfg.home / "ccxt_basis.json")
     if name == "alpaca":
+        if cfg.is_live and b.get("paper", True):
+            raise RuntimeError("mode: live with broker.paper: true is contradictory; set paper: false")
         from .alpaca_broker import AlpacaBroker
 
         return AlpacaBroker(paper=not cfg.is_live, stock_feed=b.get("stock_feed", "iex"), crypto_feed=b.get("crypto_feed", "us"))

@@ -151,10 +151,21 @@ class AlpacaBroker(Broker):
                 break
             time.sleep(0.5)
             o = self._req("GET", f"{self.base}/v2/orders/{o['id']}")
+        if order.type == "market" and o.get("status") not in ("filled", "canceled", "rejected", "expired"):
+            try:  # don't leave a working remainder that would stack on next cycle's order
+                self._req("DELETE", f"{self.base}/v2/orders/{o['id']}")
+                o = self._req("GET", f"{self.base}/v2/orders/{o['id']}")
+            except AlpacaError:
+                pass
         filled = float(o.get("filled_qty") or 0.0)
         px = float(o.get("filled_avg_price") or 0.0) or self.last_price(order.symbol)
         status = "filled" if filled else ("rejected" if o.get("status") in ("rejected", "canceled") else "accepted")
         return Fill(o["id"], order.symbol, order.side, filled, px, 0.0, status=status, raw=o)
 
-    def cancel_all(self, symbol: str | None = None) -> None:
-        self._req("DELETE", f"{self.base}/v2/orders")
+    def cancel_open(self, symbol: str, prefix: str = "ht-") -> int:
+        n = 0
+        for o in self._req("GET", f"{self.base}/v2/orders", params={"status": "open", "symbols": symbol}) or []:
+            if (o.get("client_order_id") or "").startswith(prefix):
+                self._req("DELETE", f"{self.base}/v2/orders/{o['id']}")
+                n += 1
+        return n

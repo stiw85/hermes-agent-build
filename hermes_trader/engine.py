@@ -29,6 +29,21 @@ Reviewer = Callable[[Signal, RiskDecision, Account, pd.DataFrame], dict[str, Any
 Notifier = Callable[[str], None]
 
 
+def review_multiplier(verdict: str, size_mult: Any) -> float:
+    """Interpret an LLM review. The verdict decides first; a malformed reply never enlarges a trade."""
+    if verdict == "approve":
+        return 1.0
+    if verdict == "veto":
+        return 0.0
+    if verdict == "reduce":
+        try:
+            m = float(size_mult)
+        except (TypeError, ValueError):
+            return 0.5
+        return 0.5 if not 0.0 < m < 1.0 else m
+    raise ValueError(f"unrecognised verdict {verdict!r}")
+
+
 def closed_bars(df: pd.DataFrame, timeframe: str, now: datetime) -> pd.DataFrame:
     """Drop the still-forming candle that most venues return as the last row."""
     if df.empty:
@@ -79,6 +94,13 @@ class Engine:
 
         report: dict[str, Any] = {"ts": now.isoformat(), "equity": round(acct.equity, 2), "level": level,
                                   "why": why, "symbols": {}}
+        if level == "kill":
+            # flatten everything (incl. dust and symbols whose data failed), then do nothing else
+            if any(p.qty for p in acct.positions.values()):
+                report["flatten"] = self.flatten(f"kill switch: {why}")
+            self.meta["last_cycle"] = now.isoformat()
+            self.save()
+            return report
         for sym in self.symbols:
             try:
                 report["symbols"][sym] = self._symbol(sym, acct, level, now)
@@ -103,13 +125,18 @@ class Engine:
         price = self.broker.last_price(sym)
         pos = acct.positions.get(sym)
 
-        # protective ATR stop + no immediate re-entry on the same side
+        # stale bot orders from a previous cycle would stack on top of the new one
+        self.broker.cancel_open(sym)
+
+        # protective ATR stop + no re-entry on the same side until the strategy itself resets
+        raw_target = sig.target
         if pos and self.risk.stop_hit(pos.qty, pos.avg_price, price, sig.atr):
             self.cooldown[sym] = 1 if pos.qty > 0 else -1
+            self.journal.event("stop", f"{sym}: ATR stop at {price:.6g} (avg {pos.avg_price:.6g})")
             sig.target, sig.reason = 0.0, f"ATR stop hit (avg {pos.avg_price:.4g}, px {price:.4g}); " + sig.reason
         blocked = self.cooldown.get(sym)
         if blocked:
-            if sig.target * blocked > 0:
+            if raw_target * blocked > 0:
                 sig.target, sig.reason = 0.0, "re-entry blocked until signal resets after stop; " + sig.reason
             else:
                 self.cooldown.pop(sym, None)
@@ -119,16 +146,18 @@ class Engine:
         if dec.order and self.reviewer and self._adds_risk(dec):
             try:
                 rv = self.reviewer(sig, dec, acct, df)
-                verdict, note = str(rv.get("verdict", "approve")), str(rv.get("note", ""))[:500]
-                mult = max(0.0, min(1.0, float(rv.get("size_mult", 1.0))))
-                if verdict == "veto" or mult == 0:
-                    dec.order, verdict = None, "veto"
-                elif mult < 1.0:
-                    dec.order.qty *= mult
-                    if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:
-                        dec.order, verdict = None, "veto"
-            except Exception as e:  # reviewer is advisory; strategy + risk already approved
-                verdict, note = "error", f"review failed, proceeding: {e}"[:300]
+                verdict, note = str(rv.get("verdict", "")).strip().lower(), str(rv.get("note", ""))[:500]
+                mult = review_multiplier(verdict, rv.get("size_mult"))
+            except Exception as e:
+                on_err = self.cfg["llm"].get("on_review_error", "reduce")
+                mult = {"proceed": 1.0, "veto": 0.0}.get(on_err, 0.5)
+                verdict, note = "error", f"review failed ({on_err}, x{mult}): {e}"[:300]
+            if mult <= 0:
+                dec.order, verdict = None, "veto" if verdict != "error" else verdict
+            elif mult < 1.0:
+                dec.order.qty *= mult
+                if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:
+                    dec.order = None
 
         action = "hold"
         fill: Fill | None = None
@@ -146,14 +175,15 @@ class Engine:
             self.journal.fill(order_id=fill.order_id, symbol=sym, side=fill.side.value, qty=fill.qty,
                               price=fill.price, fee=fill.fee, status=fill.status, strategy=sig.strategy,
                               reason=sig.reason[:500], realized_pnl=realized)
-            if fill.status == "filled":
+            if fill.status in ("filled", "accepted"):
                 self.state.trades_today += 1
+            if fill.status == "filled":
                 pnl = f", realized {realized:+.2f}" if realized is not None else ""
                 self.notify(f"{'🟢' if fill.side == Side.BUY else '🔴'} {sym} {action}{pnl}\n{sig.reason[:200]}")
             elif fill.status == "rejected":
                 self.journal.event("reject", f"{sym}: {fill.raw.get('error', fill.raw)}")
-        elif verdict == "veto":
-            action = "vetoed"
+        elif dec.approved:  # risk approved an order but review removed it
+            action = "vetoed" if verdict == "veto" else f"skipped after review ({verdict})"
         self.journal.decision(symbol=sym, strategy=sig.strategy, params=sig.meta.get("params"), target=sig.target,
                               price=price, signal_reason=sig.reason[:500], risk_notes=dec.notes,
                               llm_verdict=verdict, llm_note=note, action=action)
@@ -168,7 +198,8 @@ class Engine:
     def flatten(self, reason: str = "manual flatten") -> list[dict[str, Any]]:
         acct = self.broker.account(self.symbols)
         out = []
-        self.broker.cancel_all()
+        for sym in self.symbols:
+            self.broker.cancel_open(sym)
         for sym, p in acct.positions.items():
             if not p.qty:
                 continue

@@ -116,10 +116,64 @@ def test_ccxt_broker(tmp_path):
     assert x.orders[-1][1:4] == ("market", "buy", 0.01)
     a = b.account(["BTC/USDT"])
     assert a.cash == 900 and a.positions["BTC/USDT"].avg_price == 50_010.0
-    assert a.equity == pytest.approx(1000 + 0.02 * 50_000)
+    # 0.01 BTC held before the bot is ignored: only the bot's own 0.01 counts
+    assert a.positions["BTC/USDT"].qty == pytest.approx(0.01)
+    assert a.equity == pytest.approx(1000 + 0.01 * 50_000)
     assert json.loads((tmp_path / "basis.json").read_text())["BTC/USDT"]["qty"] == pytest.approx(0.01)
     df = b.fetch_ohlcv("BTC/USDT", "1h", 2500)  # paginates past 1000
     assert len(df) == 2500 and df.index.is_monotonic_increasing
+
+
+def test_ccxt_rejects_mixed_quotes(tmp_path):
+    b = CCXTBroker(client=FakeExchange(), state_path=tmp_path / "b.json")
+    with pytest.raises(ValueError, match="one quote currency"):
+        b.account(["BTC/USDT", "ETH/BTC"])
+
+
+class SlowExchange(FakeExchange):
+    """Acks market orders as open with nothing filled; fills on the 2nd poll (or never)."""
+
+    def __init__(self, fills=True):
+        super().__init__()
+        self.fills, self.polls, self.cancelled = fills, 0, []
+        self.open = [{"id": "x1", "clientOrderId": "ht-abc"}, {"id": "u1", "clientOrderId": "mine"}]
+
+    def create_order(self, symbol, type_, side, amount, price, params):
+        self.amount = amount
+        return {"id": "o2", "status": "open", "filled": None, "average": None}
+
+    def fetch_order(self, oid, symbol):
+        self.polls += 1
+        if self.fills and self.polls >= 2:
+            return {"id": oid, "status": "closed", "filled": self.amount, "cost": self.amount * 50_000,
+                    "fees": [{"cost": 0.0001, "currency": "BTC"}]}
+        return {"id": oid, "status": "open", "filled": 0}
+
+    def cancel_order(self, oid, symbol):
+        self.cancelled.append(oid)
+
+    def fetch_open_orders(self, symbol):
+        return self.open
+
+
+def test_ccxt_polls_until_filled_and_nets_base_fee(tmp_path):
+    x = SlowExchange(fills=True)
+    b = CCXTBroker(client=x, state_path=tmp_path / "b.json")
+    b._sleep = lambda s: None
+    f = b.submit(Order("BTC/USDT", Side.BUY, 0.01))
+    assert f.status == "filled" and f.price == pytest.approx(50_000) and f.fee == pytest.approx(5.0)
+    assert b.basis["BTC/USDT"]["qty"] == pytest.approx(0.0099)  # fee taken in BTC
+    assert b.basis["BTC/USDT"]["avg_price"] == pytest.approx(50_000)
+
+
+def test_ccxt_cancels_unfilled_market_order(tmp_path):
+    x = SlowExchange(fills=False)
+    b = CCXTBroker(client=x, state_path=tmp_path / "b.json")
+    b._sleep = lambda s: None
+    f = b.submit(Order("BTC/USDT", Side.BUY, 0.01))
+    assert f.status == "rejected" and f.qty == 0 and "o2" in x.cancelled
+    assert "BTC/USDT" not in b.basis
+    assert b.cancel_open("BTC/USDT") == 1 and x.cancelled[-1] == "x1"  # never touches the user's own order
 
 
 # ---------------------------------------------------------------- alpaca
@@ -199,6 +253,13 @@ def test_live_requires_latch(tmp_path, monkeypatch):
     cfg2 = load_config(overrides={"home": str(tmp_path), "mode": "live", "broker": {"name": "paper"}})
     with pytest.raises(RuntimeError, match="real broker"):
         make_broker(cfg2)
+
+
+def test_alpaca_live_needs_paper_false(tmp_path, monkeypatch):
+    monkeypatch.setenv(LIVE_ACK_ENV, LIVE_ACK_VALUE)
+    cfg = load_config(overrides={"home": str(tmp_path), "mode": "live", "broker": {"name": "alpaca"}})
+    with pytest.raises(RuntimeError, match="paper: false"):
+        make_broker(cfg)
 
 
 def test_paper_mode_refuses_real_exchange(tmp_path):

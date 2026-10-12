@@ -57,6 +57,7 @@ DEFAULTS: dict[str, Any] = {
         "temperature": 0.2,
         "timeout": 60,
         "trade_review": True,  # LLM may veto/shrink (never enlarge) proposed trades
+        "on_review_error": "reduce",  # reduce (x0.5) | veto | proceed - when the LLM is down or replies garbage
         "max_tool_iterations": 12,
     },
     "improve": {
@@ -68,6 +69,7 @@ DEFAULTS: dict[str, Any] = {
         "max_candidates": 60,
         "strategies": ["sma_cross", "ema_cross", "rsi_reversion", "donchian_breakout", "bollinger_reversion"],
         "reflect_after_trades": 10,
+        "promote_cooldown_hours": 24,  # agent-requested promotions per symbol
     },
     "schedule": {
         "cycle_minutes": 60,

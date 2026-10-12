@@ -110,7 +110,7 @@ class RiskManager:
         if abs(delta) > c["max_order_notional"]:
             notes.append(f"order capped at {c['max_order_notional']:.0f}")
             delta = c["max_order_notional"] * (1 if delta > 0 else -1)
-        if abs(delta) < c["min_order_notional"]:
+        if abs(delta) < c["min_order_notional"] and not closing:
             return RiskDecision(None, False, notes + ["below min order notional"], desired, cur_val)
         if delta > 0 and not closing and delta > account.cash * 0.999 and cur_val >= 0:
             delta = account.cash * 0.99

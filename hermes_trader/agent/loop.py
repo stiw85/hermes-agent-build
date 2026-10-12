@@ -80,13 +80,7 @@ def make_reviewer(llm: LLM, toolkit: Toolkit) -> Callable[[Signal, RiskDecision,
             {"role": "user", "content": REVIEW_PROMPT + "\n" + json.dumps(ctx, default=str)},
         ]
         reply = llm.chat(msgs, json_mode=True).get("content") or ""
-        out = parse_json(reply)
-        out["verdict"] = str(out.get("verdict", "approve")).lower()
-        if out["verdict"] not in ("approve", "reduce", "veto"):
-            out["verdict"] = "approve"
-        if out["verdict"] == "approve":
-            out["size_mult"] = 1.0
-        return out
+        return parse_json(reply)  # engine.review_multiplier interprets it (verdict first, never enlarges)
 
     return review
 

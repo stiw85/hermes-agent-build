@@ -42,8 +42,9 @@ class Broker(ABC):
     @abstractmethod
     def submit(self, order: Order) -> Fill: ...
 
-    def cancel_all(self, symbol: str | None = None) -> None:  # noqa: B027 - optional
-        return None
+    def cancel_open(self, symbol: str, prefix: str = "ht-") -> int:
+        """Cancel this bot's still-open orders for symbol (client ids starting with prefix). Returns count."""
+        return 0
 
     def is_tradable(self, symbol: str) -> bool:
         """False when the venue is closed for this symbol (e.g. US equities after hours)."""

@@ -2,7 +2,7 @@
 
 A lean, self-improving trading agent distilled from [Nous Research's Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-The original Hermes is a general-purpose assistant: about 18,000 files and 247 MB, with chat gateways, desktop apps, browser automation, TTS, a website and 35 locales. This branch keeps only the ideas that matter for trading and rebuilds them as **~2,900 lines of Python with 4 core dependencies**:
+The original Hermes is a general-purpose assistant: about 18,000 files and 247 MB, with chat gateways, desktop apps, browser automation, TTS, a website and 35 locales. This branch keeps only the ideas that matter for trading and rebuilds them as **~3,000 lines of Python with 4 core dependencies**:
 
 | Kept from Hermes | Became |
 |---|---|
@@ -28,7 +28,8 @@ The original Hermes is a general-purpose assistant: about 18,000 files and 247 M
 **Safety design**
 - The bot trades **without** an LLM. The LLM is an optional overlay that can only *shrink or veto* new risk. It can never enlarge an order or block an exit. If the LLM is down, the bot proceeds on strategy + risk alone and logs it.
 - Risk limits live only in `config.yaml`. The agent has no tool to change them.
-- Strategy changes go through a **walk-forward gate**: the optimiser tunes on the first 70% of history, scores on the unseen last 30%, and promotes only if the challenger beats the incumbent's out-of-sample score by a margin, with enough trades and acceptable drawdown. This applies to the LLM's requests too.
+- Strategy changes go through a **walk-forward gate**. The optimiser ranks candidates on the first 70% of history only and picks one challenger. It tests that challenger once on the unseen last 30%, and promotes it only if it beats the incumbent's holdout score by a margin, with enough trades and acceptable drawdown. LLM-requested promotions go through the same gate and are limited to one attempt per symbol per day. On 20 pure random walks, 1 in 20 got promoted.
+- If the LLM is down or replies with something unreadable, new trades go ahead at half size (`on_review_error: reduce`). You can change this to `veto` or `proceed`.
 - Circuit breakers: a daily loss limit switches to reduce-only, and a max-drawdown **kill switch** flattens everything and halts until you run `resume`.
 - Paper mode is the default. A paper config pointed at a real exchange is refused. `mode: live` also needs the env latch `HERMES_TRADER_LIVE=I_UNDERSTAND_REAL_MONEY`.
 
@@ -109,7 +110,7 @@ hermes_trader/
   agent/     llm.py  loop.py  tools.py  memory.py  prompts.py
   playbooks/ bundled procedural playbooks (SKILL.md)
   templates/ config.example.yaml, env.example (copied by `init`)
-tests/       48 tests: no-look-ahead, risk limits, kill switch, broker adapters, LLM veto/clamp, gated promotion
+tests/       60 tests: no-look-ahead, holdout isolation, risk limits, kill switch, stop cooldown, broker adapters, LLM veto/clamp, gated promotion
 ```
 
 Runtime state lives in `data/` (`journal.sqlite`, `strategy_book.yaml`, `LESSONS.md`, `playbooks/`, broker state). Back it up, because this is what the bot has learned.
@@ -124,6 +125,8 @@ docker run -d --name trader --env-file .env -v $PWD/config.yaml:/app/config.yaml
 - Backtests on synthetic data only prove that the plumbing works. Use real history (`data_source: ccxt` or `alpaca`, or CSV) before trusting any strategy.
 - Walk-forward gating reduces overfitting; it does not eliminate it. Paper trade for weeks before considering `mode: live`.
 - Spot or cash only. There is no leverage, margin or derivatives support, by design.
+- ccxt: use one quote currency for all symbols (for example all `/USDT`). The bot only tracks and trades coins it bought itself, so anything you already held is never sold.
+- The agent's `run_backtest` tool can still look at the whole history. The promotion gate and rate limit stop it from acting on what it sees there, but a human can always over-fit by hand.
 - This is not financial advice. You are responsible for any orders it places.
 
 ## License

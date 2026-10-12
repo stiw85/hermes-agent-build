@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime
 from typing import Any, Callable
 
 import numpy as np
@@ -14,7 +15,7 @@ from ..backtest import backtest, buy_and_hold, periods_per_year
 from ..brokers.base import asset_class_of
 from ..engine import Engine
 from ..improve import Improver
-from ..models import Order, Side
+from ..models import Order, Side, utcnow
 from ..strategies import describe, make
 from .memory import Lessons, Playbooks
 
@@ -72,11 +73,12 @@ class Toolkit:
                              _schema({"symbol": {"type": "string"}, "strategy": {"type": "string"},
                                       "params": {"type": "object"}, "bars": {"type": "integer"}},
                                      ["symbol", "strategy"]), self.run_backtest),
-            "optimize": ("Walk-forward search for a symbol. Returns leaderboard; does NOT change anything.",
+            "optimize": ("Walk-forward search (train-ranked) + holdout check of the top pick. Changes nothing.",
                          _schema({"symbol": {"type": "string"},
                                   "strategies": {"type": "array", "items": {"type": "string"}}}, ["symbol"]),
                          self.optimize),
-            "promote_strategy": ("Switch a symbol to strategy+params IF it passes the out-of-sample gate.",
+            "promote_strategy": ("Switch a symbol to strategy+params IF it passes the holdout gate. "
+                                 "Max one attempt per symbol per day: pick carefully.",
                                  _schema({"symbol": {"type": "string"}, "strategy": {"type": "string"},
                                           "params": {"type": "object"}, "why": {"type": "string"}},
                                          ["symbol", "strategy", "params", "why"]), self.promote),
@@ -151,18 +153,24 @@ class Toolkit:
         return self.imp.run(symbol, df, self.e.book, promote=False, strategies=strategies).to_dict()
 
     def promote(self, symbol: str, strategy: str, params: dict, why: str) -> dict:
+        # one holdout test per symbol per cooldown: stops the agent re-rolling candidates against the same holdout
+        hours = float(self.cfg["improve"].get("promote_cooldown_hours", 24))
+        attempts = self.e.meta.setdefault("promote_attempts", {})
+        last = attempts.get(symbol)
+        now = utcnow()
+        if last and (now - datetime.fromisoformat(last)).total_seconds() < hours * 3600:
+            return {"promoted": False, "reason": f"one promotion attempt per {hours:g}h per symbol; last at {last}"}
         df = self._df(symbol, self.cfg["improve"]["lookback_bars"])
         make(strategy, params)
+        attempts[symbol] = now.isoformat()
+        self.e.save()
         cand = self.imp.evaluate(symbol, df, strategy, params)
-        inc = self.e.book.entry(symbol)
-        try:
-            inc_score = self.imp.evaluate(symbol, df, inc["strategy"], inc.get("params") or {}).score
-        except ValueError:
-            inc_score = -math.inf
+        inc_score = self.imp.incumbent_score(symbol, df, self.e.book.entry(symbol))
         ok, reason = self.imp.gate(cand, inc_score)
+        self.e.journal.event("promote_attempt", f"{symbol}: {strategy}{params} -> {ok} ({reason})", {"why": why})
         if not ok:
-            return {"promoted": False, "reason": reason, "candidate_test": cand.test}
-        entry = self.e.book.promote(symbol, strategy, params, {"test": cand.test, "score": round(cand.score, 3),
+            return {"promoted": False, "reason": reason}
+        entry = self.e.book.promote(symbol, strategy, params, {"holdout": cand.test, "score": round(cand.score, 3),
                                                                "why": why[:300]}, source="agent")
         self.e.journal.event("promote", f"{symbol}: {strategy}{params} ({reason})", {"why": why})
         return {"promoted": True, "reason": reason, "version": entry["version"]}

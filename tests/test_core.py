@@ -75,6 +75,14 @@ def test_backtest_costs_and_alignment():
     assert r1.trades == 1
 
 
+def test_drawdown_counts_from_initial_capital():
+    df = make_df(10, vol=0.0, trend=0.0)
+    df.loc[df.index[4]:, "close"] = 50.0  # -50% on the first scored bar
+    r = backtest(df, AlwaysLong(), fee_bps=0, slippage_bps=0, eval_from=4)
+    assert r.total_return == pytest.approx(-0.5)
+    assert r.max_drawdown == pytest.approx(0.5)
+
+
 def test_backtest_eval_from_only_scores_tail():
     df = make_df(400)
     r = backtest(df, make("sma_cross"), eval_from=300)
@@ -160,6 +168,13 @@ def test_breakers():
     assert rm.size(Signal("X", 0.0, "x"), acct(9300, pos), 100.0, "reduce_only").order.side == Side.SELL
     # kill flattens even if strategy says long
     assert rm.size(Signal("X", 1.0, "x"), acct(9300, pos), 100.0, "kill").order.side == Side.SELL
+
+
+def test_kill_closes_dust():
+    rm = RiskManager(RISK)
+    pos = {"X": Position("X", 0.05, 100, 100)}  # $5 < min_order_notional
+    d = rm.size(Signal("X", 1.0, "x"), acct(9995, pos), 100.0, "kill")
+    assert d.order and d.order.side == Side.SELL and d.order.qty == pytest.approx(0.05)
 
 
 def test_stop_hit():
