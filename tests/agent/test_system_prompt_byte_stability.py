@@ -136,3 +136,49 @@ def test_memory_write_mid_session_leaves_the_system_message_unchanged(relay):
     assert note in _system_text(srv.main_requests()[-1]), (
         "a new session does not pick up the saved memory"
     )
+
+
+def _select_native(home: Path, *, learning: bool) -> None:
+    """Point ``memory.provider`` at the native learning provider, round-tripping the rest of config.yaml."""
+    from ruamel.yaml import YAML
+
+    yaml = YAML()
+    path = home / "config.yaml"
+    data = yaml.load(path.read_text(encoding="utf-8")) or {}
+    data.setdefault("memory", {})["provider"] = "native"
+    data.setdefault("plugins", {}).setdefault("native-memory", {})["learning"] = (
+        learning
+    )
+    with path.open("w", encoding="utf-8") as handle:
+        yaml.dump(data, handle)
+
+
+def test_native_recall_rides_prefetch_and_leaves_the_system_message_identical(relay):
+    from plugins.memory.native.store import NativeStore
+
+    srv, home = relay
+    _select_native(home, learning=False)
+    seeded = NativeStore(home / "memory_native.db")
+    seeded.add(text="The user prefers espresso over drip coffee.")
+    seeded.close()
+    srv.push(Text("first answer"), Text("second answer"))
+    agent = _agent(srv, home)
+    history: list[dict[str, Any]] = []
+    for text in ("what coffee does the user prefer", "and tomorrow?"):
+        history = agent.run_conversation(
+            text, conversation_history=history, task_id="t"
+        )["messages"]
+    agent.close()
+
+    main = srv.main_requests()
+    assert len(main) == 2
+    texts = [_system_text(body) for body in main]
+    assert all(text == texts[0] for text in texts), (
+        "native recall changed the system message"
+    )
+    assert "espresso" not in texts[0], (
+        "recalled facts leaked into the cached system prompt"
+    )
+    assert "espresso" in str(main[0]["messages"]), (
+        "recall did not reach the request at all"
+    )

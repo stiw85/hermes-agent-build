@@ -1,0 +1,78 @@
+{
+  "description": "Seed labelled set for native learning memory (Phase 0). Fictional personas. Each session lists the gold conclusions a good learner would store; 'key' names a conclusion, 'supersedes' names earlier keys it replaces. Questions are answerable from the stored conclusions; 'answers' are lowercase substrings that a correct recall must contain.",
+  "builtin_char_limit": 2200,
+  "items": [
+    {
+      "id": "dana-relocation",
+      "sessions": [
+        {"id": "dana-1", "gold": [
+          {"key": "d-lisbon", "text": "Dana lives in Lisbon."},
+          {"key": "d-ts", "text": "Dana prefers TypeScript over JavaScript for new projects."},
+          {"key": "d-mira", "text": "Dana's sister Mira is a veterinarian."}
+        ]},
+        {"id": "dana-2", "gold": [
+          {"key": "d-porto", "text": "Dana moved to Porto from Lisbon.", "supersedes": ["d-lisbon"]}
+        ]}
+      ],
+      "questions": [
+        {"question": "Where does Dana live now?", "answers": ["porto"]},
+        {"question": "Which language does Dana prefer for new projects?", "answers": ["typescript"]},
+        {"question": "What does Dana's sister Mira do for work?", "answers": ["veterinarian"]}
+      ]
+    },
+    {
+      "id": "sam-training",
+      "sessions": [
+        {"id": "sam-1", "gold": [
+          {"key": "s-race", "text": "Sam is training for a half marathon in October."},
+          {"key": "s-cilantro", "text": "Sam dislikes cilantro."}
+        ]},
+        {"id": "sam-2", "gold": [
+          {"key": "s-race-nov", "text": "Sam's half marathon was moved to November.", "supersedes": ["s-race"]}
+        ]}
+      ],
+      "questions": [
+        {"question": "When is Sam's half marathon?", "answers": ["november"]},
+        {"question": "Which food does Sam dislike?", "answers": ["cilantro"]}
+      ]
+    },
+    {
+      "id": "priya-deploys",
+      "sessions": [
+        {"id": "priya-1", "gold": [
+          {"key": "p-fri", "text": "Priya's team deploys to production on Fridays."},
+          {"key": "p-k8s", "text": "Priya's team runs its services on Kubernetes."}
+        ]},
+        {"id": "priya-2", "gold": [
+          {"key": "p-tue", "text": "Priya's team moved its production deploys to Tuesdays.", "supersedes": ["p-fri"]},
+          {"key": "p-aws", "text": "Priya's team hosts its Kubernetes clusters on AWS."}
+        ]}
+      ],
+      "questions": [
+        {"question": "Which day does Priya's team deploy to production?", "answers": ["tuesday"]},
+        {"question": "Which cloud does Priya's team host on?", "answers": ["aws"]}
+      ]
+    },
+    {
+      "id": "omar-projects",
+      "sessions": [
+        {"id": "omar-1", "gold": [
+          {"key": "o-cello", "text": "Omar's favourite instrument is the cello."}
+        ]},
+        {"id": "omar-2", "gold": [
+          {"key": "o-canoe", "text": "Omar is building a wooden canoe in his garage."},
+          {"key": "o-cello-back", "text": "Omar is learning the cello again after a long break."}
+        ]}
+      ],
+      "questions": [
+        {"question": "What instrument does Omar play?", "answers": ["cello"]},
+        {"question": "What is Omar building at the moment?", "answers": ["canoe"]}
+      ]
+    }
+  ],
+  "filler": {
+    "sessions": 30,
+    "per_session": 2,
+    "note": "Unrelated people and facts with no answer keys. They make the stored volume grow past the built-in cap."
+  }
+}
