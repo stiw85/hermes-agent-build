@@ -356,7 +356,10 @@ def make_handler(svc: Service, token: str, port_ref: list[int]) -> type[BaseHTTP
                 return True
             auth = self.headers.get("Authorization") or ""
             if not secrets.compare_digest(auth, f"Bearer {token}"):
-                self._send(401, {"error": "missing or bad token"})
+                self._send(401, {"error": "missing or bad token",
+                                 "hint": "This is the Hermes Trader API for the desktop app, not a web page. Open the "
+                                         "app (cd desktop && npm start). For scripts, send 'Authorization: Bearer "
+                                         "<token>' using the token in data/api_token."})
                 return False
             return True
 
