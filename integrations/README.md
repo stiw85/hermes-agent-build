@@ -22,9 +22,25 @@ through public plugin APIs only.
   - `apps/desktop/shared/office/xlsx/comments/checks.ts`: the default test interpreter path is built from
     `tmpdir()` instead of a literal `/tmp` path.
 
-## Turning the bridge on
+## One-command setup (Hermes + Herald OS desktop)
 
-The bridge is off until you enable it. It is a plugin, so nothing is copied into your Hermes home:
+`scripts/setup-herald.sh` is the complete package: it installs Hermes from this repository
+(`scripts/install.sh`), runs Herald's own bootstrap (npm workspaces, the Electron binary, the
+bridge link and `hermes plugins enable herald-os-bridge`), and installs a `herald` launcher plus
+an application-menu entry. It needs git, curl and Node 22.12+, and is safe to re-run.
+
+```bash
+bash scripts/setup-herald.sh        # from a checkout; or standalone:
+curl -fsSL https://raw.githubusercontent.com/stiw85/hermes-agent-build/claude/native-memory/scripts/setup-herald.sh | bash
+```
+
+Afterwards, `herald` (or "Herald OS" in the application menu) starts the desktop.
+`tests/scripts/test_setup_herald.py` covers the script's plan in dry-run mode.
+
+## Turning the bridge on by hand
+
+`setup-herald.sh` above does this for you. The bridge is otherwise off until you enable it. It is
+a plugin, so nothing is copied into your Hermes home:
 
 ```bash
 ln -sfn "$PWD/integrations/herald-os/plugins/herald-os-bridge" "${HERMES_HOME:-$HOME/.hermes}/plugins/herald-os-bridge"
