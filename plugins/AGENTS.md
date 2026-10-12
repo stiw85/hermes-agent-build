@@ -25,6 +25,11 @@ command. A hook with no concrete consumer is speculative infrastructure and is r
   `plugins.memory.import_provider_module`, never a `plugins.memory.<name>` import. New
   backends ship as standalone repos implementing the same `MemoryProvider` ABC, discovered through
   the same path, integrated via `hermes memory setup` / `post_setup()`.
+- **Exception: native learning memory (this fork, 12 Oct 2026).** `plugins/memory/native/` is an
+  in-tree memory provider, built on the fork owner's decision to keep learning memory in-tree rather than
+  as a standalone repo. It is opt-in (`memory.provider: native`), has no dependencies, and makes no model
+  call on the recall path. Its one model call, session-end learning, uses `auxiliary.memory_learning`.
+  The exception covers this provider only. It does not reopen `plugins/memory/` for other providers.
 - **Other features that leave core** (Home Assistant platform + toolset, Oct 2026 →
   `plugin-catalog/homeassistant.yaml`; Spotify toolset → `plugin-catalog/spotify.yaml`) keep their
   names/config/env and get a row in
