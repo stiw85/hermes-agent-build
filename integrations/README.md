@@ -22,6 +22,22 @@ through public plugin APIs only.
   - `apps/desktop/shared/office/xlsx/comments/checks.ts`: the default test interpreter path is built from
     `tmpdir()` instead of a literal `/tmp` path.
 
+## Turning the bridge on
+
+The bridge is off until you enable it. It is a plugin, so nothing is copied into your Hermes home:
+
+```bash
+ln -sfn "$PWD/integrations/herald-os/plugins/herald-os-bridge" "${HERMES_HOME:-$HOME/.hermes}/plugins/herald-os-bridge"
+hermes plugins enable herald-os-bridge
+hermes gateway restart    # if the gateway is running
+```
+
+Once enabled, its tools are offered only inside Herald OS's own sessions (`bridge/scope.py`). Ordinary
+Hermes sessions never see them.
+
+`tests/integrations/test_herald_os_bridge.py` checks both states (off by default, then enabled) against
+a temporary home. It takes about a minute because it starts Hermes twice.
+
 ## Running the bridge's tests
 
 ```bash
