@@ -71,6 +71,14 @@ DEFAULTS: dict[str, Any] = {
         "reduce_below": 0.55,  # gate: below this -> half size
         "on_error": "proceed",  # gate mode when Jev is unreachable: proceed | reduce | veto
         "min_shadow_trades": 30,  # report won't suggest gating before this many scored trades have closed
+        "checks": {  # every bar, every symbol: regime + strategy fit (+ exit check on open positions)
+            "enabled": True,
+            "mode": "shadow",  # shadow: record + score | act: may only block new entries or close positions
+            "regime_block_below": 0.35,  # act: strategy stands aside (no new risk) when fit < this
+            "exit_above": 0.70,  # act: close the position when P(exit) >= this
+            "horizon_bars": 6,  # outcomes are scored this many bars later
+            "min_resolved": 50,
+        },
     },
     "improve": {
         "lookback_bars": 2000,

@@ -163,7 +163,22 @@ export function MarketsPage() {
                     { label: 'Strategy', value: c.strategy.strategy },
                     { label: 'Params', value: <span className="font-mono text-[11.5px]">{JSON.stringify(c.strategy.params)}</span> },
                     { label: 'Version', value: `v${c.strategy.version} · ${c.strategy.source}` },
-                    { label: 'Position', value: pos ? `${pos.qty > 0 ? 'Long' : 'Short'} ${Number(pos.qty.toPrecision(6))}` : 'Flat' }
+                    { label: 'Position', value: pos ? `${pos.qty > 0 ? 'Long' : 'Short'} ${Number(pos.qty.toPrecision(6))}` : 'Flat' },
+                    ...(c.jev
+                      ? [
+                          {
+                            label: 'JEV now',
+                            value: c.jev.error ? (
+                              <span className="text-warn">check failed</span>
+                            ) : (
+                              <span title={`as of ${fmtTime(c.jev.ts)} · ${c.jev.mode}`}>
+                                {(c.jev.regime ?? '?').replace('_', ' ')} · fit {c.jev.p == null ? '—' : `${Math.round(c.jev.p * 100)}%`}
+                                {c.jev.applied ? ' · standing aside' : ''}
+                              </span>
+                            )
+                          }
+                        ]
+                      : [])
                   ]}
                 />
               ) : (

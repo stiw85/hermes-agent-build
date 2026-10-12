@@ -187,7 +187,10 @@ class Toolkit:
         jc = self.cfg["jev"]
         if not jc.get("enabled"):
             return {"enabled": False}
-        return {"enabled": True, **report(self.e.journal.jev_rows(), jc)}
+        from ..jev_checks import check_report
+
+        return {"enabled": True, "entry_gate": report(self.e.journal.jev_rows(), jc),
+                "per_bar_checks": check_report(self.e.journal.jev_check_rows(), jc)}
 
     def memory(self, action: str, text: str = "", old: str = "") -> str:
         if action == "view":

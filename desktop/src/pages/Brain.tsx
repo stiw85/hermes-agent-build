@@ -140,6 +140,82 @@ function Chat({ enabled }: { enabled: boolean }) {
   )
 }
 
+function CheckTable({ title, rows, horizon, note }: { title: string; rows: { bucket: string; n: number; avg_fwd_pct: number | null; up_share: number | null }[]; horizon: number; note: string }) {
+  return (
+    <div>
+      <div className="mb-1.5 text-[12px] text-fg-3">{title}</div>
+      <table className="tabular w-full text-[12px]">
+        <thead>
+          <tr className="text-left text-fg-3">
+            <th className="pb-1.5 font-medium">JEV said</th>
+            <th className="pb-1.5 text-right font-medium">Bars</th>
+            <th className="pb-1.5 text-right font-medium">Next {horizon} bars</th>
+            <th className="pb-1.5 text-right font-medium">Went right</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(b => (
+            <tr key={b.bucket} className="border-t border-line">
+              <td className="py-1.5 text-fg-2">{b.bucket}</td>
+              <td className="py-1.5 text-right">{b.n}</td>
+              <td className={cn('py-1.5 text-right', b.avg_fwd_pct == null ? 'text-fg-4' : b.avg_fwd_pct > 0 ? 'text-ok' : b.avg_fwd_pct < 0 ? 'text-danger' : 'text-fg-3')}>
+                {b.avg_fwd_pct == null ? '—' : `${b.avg_fwd_pct > 0 ? '+' : ''}${b.avg_fwd_pct.toFixed(3)}%`}
+              </td>
+              <td className="py-1.5 text-right">{b.up_share == null ? '—' : fmtPct(b.up_share, 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-1 text-[11px] text-fg-4">{note}</p>
+    </div>
+  )
+}
+
+function ChecksPanel({ c }: { c: NonNullable<JevReport['checks']> }) {
+  const act = c.mode === 'act'
+  return (
+    <div className="flex flex-col gap-3 border-t border-line pt-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] font-semibold text-fg">Every-bar checks</span>
+        <Pill tone={act ? 'warn' : 'info'} dot className="h-5 text-[10.5px]">
+          {act ? 'Act: may stand aside or close' : 'Shadow: watching only'}
+        </Pill>
+        <span className="ml-auto text-[11.5px] text-fg-3 tabular">
+          {c.checks} answers · ${c.cost_usd.toFixed(4)}
+          {c.errors ? ` · ${c.errors} errors` : ''}
+        </span>
+      </div>
+      <Banner tone="info" title="Regime / strategy fit">
+        {c.regime.recommendation}
+      </Banner>
+      <CheckTable
+        title="Strategy fit: how the strategy's wanted direction then performed"
+        rows={c.regime.buckets}
+        horizon={c.horizon_bars}
+        note="If JEV is useful, low-fit rows should show weaker (or negative) returns than high-fit rows."
+      />
+      <Banner tone="info" title="Exit check">
+        {c.exit.recommendation}
+      </Banner>
+      <CheckTable
+        title="Exit: what holding the position then returned"
+        rows={c.exit.buckets}
+        horizon={c.horizon_bars}
+        note="If JEV is useful, high exit-probability rows should show holding lost money. 'Went right' here means the price kept moving in the position's favour."
+      />
+      {Object.keys(c.regime.seen).length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {Object.entries(c.regime.seen).map(([k, v]) => (
+            <Pill key={k} className="h-5 text-[10.5px]">
+              {k.replace('_', ' ')} · {v}
+            </Pill>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function JevPanel() {
   const r = usePoll<JevReport>('/api/jev?n=40', 20_000).data
   if (!r) return <div className="shimmer h-40 rounded-lg" />
@@ -171,7 +247,7 @@ function JevPanel() {
           {gate ? 'Gate: can shrink or veto entries' : 'Shadow: watching only'}
         </Pill>
         <span className="text-[11.5px] text-fg-3">
-          veto &lt; {r.veto_below} · half size &lt; {r.reduce_below}
+          entry gate: veto &lt; {r.veto_below} · half size &lt; {r.reduce_below}
         </span>
       </div>
       <div className="grid grid-cols-3 gap-2">
@@ -211,8 +287,9 @@ function JevPanel() {
         </table>
         <p className="mt-1.5 text-[11px] text-fg-4">Well calibrated means the "Won" column tracks "Avg P". Trust it only after dozens of closed trades.</p>
       </div>
+      {r.checks && <ChecksPanel c={r.checks} />}
       <div>
-        <div className="mb-1.5 text-[12px] text-fg-3">Latest scores</div>
+        <div className="mb-1.5 text-[12px] text-fg-3">Latest entry scores</div>
         <ul className="flex flex-col">
           {(r.recent ?? []).slice(0, 12).map((x, i) => (
             <li key={i} className="flex items-center gap-2 border-t border-line py-1.5 text-[12px] first:border-t-0">

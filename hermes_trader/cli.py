@@ -183,7 +183,10 @@ def main(argv: list[str] | None = None) -> int:
             _p({"ok": True, "endpoint": jc["url"], "model": v.model, "symbol": sym, "p_worth_taking_long": v.p,
                 "regime": v.regime, "gate_would": v.verdict, "cost_usd": v.cost})
         else:
-            _p({"enabled": bool(jc.get("enabled")), **report(e.journal.jev_rows(), jc)})
+            from .jev_checks import check_report
+
+            _p({"enabled": bool(jc.get("enabled")), "entry_gate": report(e.journal.jev_rows(), jc),
+                "per_bar_checks": check_report(e.journal.jev_check_rows(), jc)})
     elif a.cmd == "serve":
         from .server import serve
 

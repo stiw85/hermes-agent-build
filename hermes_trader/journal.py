@@ -31,7 +31,13 @@ CREATE TABLE IF NOT EXISTS jev_scores (
   regime_conf REAL, verdict TEXT, mode TEXT, applied INTEGER, cost REAL, model TEXT, error TEXT,
   taken INTEGER DEFAULT 0, order_id TEXT, outcome_pnl REAL, closed_ts TEXT
 );
+CREATE TABLE IF NOT EXISTS jev_checks (
+  id INTEGER PRIMARY KEY, ts TEXT, symbol TEXT, kind TEXT, strategy TEXT, regime TEXT, regime_conf REAL,
+  p REAL, side_sign INTEGER, price REAL, mode TEXT, applied INTEGER DEFAULT 0, cost REAL, model TEXT,
+  error TEXT, fwd_ret REAL, resolved_ts TEXT
+);
 CREATE INDEX IF NOT EXISTS ix_fills_symbol ON fills(symbol);
+CREATE INDEX IF NOT EXISTS ix_jev_checks_open ON jev_checks(symbol, resolved_ts, ts);
 CREATE INDEX IF NOT EXISTS ix_jev_open ON jev_scores(symbol, taken, closed_ts);
 CREATE INDEX IF NOT EXISTS ix_events_kind ON events(kind);
 """
@@ -145,6 +151,29 @@ class Journal:
             self.db.execute("UPDATE jev_scores SET closed_ts=?, outcome_pnl=COALESCE(outcome_pnl, 0) "
                             "WHERE symbol=? AND taken=1 AND closed_ts IS NULL", (utcnow().isoformat(), symbol))
             self.db.commit()
+
+    def jev_check(self, **row: Any) -> int:
+        return self._ins("jev_checks", row)
+
+    def jev_check_resolve(self, symbol: str, cutoff_ts: str, price: float, now_ts: str) -> int:
+        """Score checks made at or before `cutoff_ts`: forward return in their direction up to `price`."""
+        with self.lock:
+            due = self.db.execute(
+                "SELECT id, price, side_sign FROM jev_checks WHERE symbol=? AND resolved_ts IS NULL "
+                "AND error IS NULL AND ts <= ?", (symbol, cutoff_ts)).fetchall()
+            for r in due:
+                fwd = (r["side_sign"] or 0) * (price / r["price"] - 1) if r["price"] else None
+                self.db.execute("UPDATE jev_checks SET fwd_ret=?, resolved_ts=? WHERE id=?", (fwd, now_ts, r["id"]))
+            self.db.commit()
+            return len(due)
+
+    def jev_check_rows(self, n: int = 20000) -> list[dict[str, Any]]:
+        return self.rows("SELECT * FROM jev_checks ORDER BY id DESC LIMIT ?", (n,))
+
+    def jev_latest_check(self, symbol: str) -> dict[str, Any] | None:
+        rows = self.rows("SELECT * FROM jev_checks WHERE symbol=? AND kind='regime' ORDER BY id DESC LIMIT 1",
+                         (symbol,))
+        return rows[0] if rows else None
 
     def jev_rows(self, n: int = 5000) -> list[dict[str, Any]]:
         return self.rows("SELECT * FROM jev_scores ORDER BY id DESC LIMIT ?", (n,))

@@ -211,7 +211,12 @@ class Service:
         recent = [{k: r.get(k) for k in ("ts", "symbol", "side", "strategy", "p", "regime", "verdict", "applied",
                                          "taken", "outcome_pnl", "closed_ts", "error")}
                   for r in rows[: min(int(q.get("n", 50)), 500)]]
-        return {"enabled": bool(jc.get("enabled")), "error": self.app.jev_error, **report(rows, jc), "recent": recent}
+        out = {"enabled": bool(jc.get("enabled")), "error": self.app.jev_error, **report(rows, jc), "recent": recent}
+        if jc.get("enabled") and (jc.get("checks") or {}).get("enabled", True):
+            from .jev_checks import check_report
+
+            out["checks"] = check_report(self.app.engine.journal.jev_check_rows(), jc)
+        return out
 
     def config(self) -> dict[str, Any]:
         raw = self.app.cfg.raw
@@ -247,7 +252,11 @@ class Service:
             "ORDER BY id DESC LIMIT 300", (sym,))
         rows = [[int(ts.timestamp() * 1000), *map(float, r)] for ts, r in
                 zip(df.index, df[["open", "high", "low", "close", "volume"]].to_numpy(), strict=True)]
+        jev_now = self.app.engine.journal.jev_latest_check(sym)
+        if jev_now:
+            jev_now = {k: jev_now.get(k) for k in ("ts", "regime", "regime_conf", "p", "mode", "applied", "error")}
         return clean({"symbol": sym, "timeframe": self.app.cfg["timeframe"], "candles": rows, "snapshot": snap,
+                      "jev": jev_now,
                       "strategy": {k: v for k, v in entry.items() if k != "history"}, "fills": fills})
 
     def equity(self, q: dict[str, str]) -> list[dict[str, Any]]:

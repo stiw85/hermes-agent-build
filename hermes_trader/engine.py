@@ -64,7 +64,7 @@ def closed_bars(df: pd.DataFrame, timeframe: str, now: datetime) -> pd.DataFrame
 class Engine:
     def __init__(self, cfg: Config, broker: Broker, journal: Journal | None = None,
                  book: StrategyBook | None = None, reviewer: Reviewer | None = None,
-                 notify: Notifier | None = None, jev: EntryScorer | None = None) -> None:
+                 notify: Notifier | None = None, jev: EntryScorer | None = None, jev_checks: Any = None) -> None:
         self.cfg = cfg
         self.broker = broker
         self.journal = journal or Journal(cfg.home / "journal.sqlite")
@@ -72,6 +72,7 @@ class Engine:
         self.risk = RiskManager(cfg["risk"], allow_short=cfg["allow_short"])
         self.reviewer = reviewer
         self.jev = jev
+        self.jev_checks = jev_checks  # jev_checks.JevChecker: regime / fit / exit every bar
         self.notify = notify or (lambda msg: None)
         self.state_path: Path = cfg.home / "engine_state.json"
         raw = json.loads(self.state_path.read_text()) if self.state_path.is_file() else {}
@@ -138,8 +139,14 @@ class Engine:
         # stale bot orders from a previous cycle would stack on top of the new one
         self.broker.cancel_open(sym)
 
+        raw_target = sig.target  # the strategy's own view, before any stop or JEV exit overrides it
+
+        # JEV per-bar checks (one request): score old answers, ask new ones, act only to reduce risk
+        regime_block, check_note = False, ""
+        if self.jev_checks:
+            regime_block, check_note = self._jev_checks(sym, sig, pos, df, price, now)
+
         # protective ATR stop + no re-entry on the same side until the strategy itself resets
-        raw_target = sig.target
         if pos and self.risk.stop_hit(pos.qty, pos.avg_price, price, sig.atr):
             self.cooldown[sym] = 1 if pos.qty > 0 else -1
             self.journal.event("stop", f"{sym}: ATR stop at {price:.6g} (avg {pos.avg_price:.6g})")
@@ -147,7 +154,7 @@ class Engine:
         blocked = self.cooldown.get(sym)
         if blocked:
             if raw_target * blocked > 0:
-                sig.target, sig.reason = 0.0, "re-entry blocked until signal resets after stop; " + sig.reason
+                sig.target, sig.reason = 0.0, "re-entry blocked until signal resets after a stop/exit; " + sig.reason
             else:
                 self.cooldown.pop(sym, None)
 
@@ -155,6 +162,9 @@ class Engine:
         verdict, note = "", ""
         blocked_by = ""
         jev_id, jev_p, jev_note = None, None, ""
+        if dec.order and regime_block and self._adds_risk(dec):
+            dec.order, blocked_by = None, "JEV regime"
+            dec.notes.append("JEV: strategy stands aside in this regime (no new risk)")
         if dec.order and self.jev and self._adds_risk(dec):
             jev_id, jev_p, jev_note = self._jev_review(sig, dec, acct, df, price)
             if dec.order is None:
@@ -204,13 +214,14 @@ class Engine:
             elif fill.status == "rejected":
                 self.journal.event("reject", f"{sym}: {fill.raw.get('error', fill.raw)}")
         elif dec.approved:  # risk approved an order but review removed it
-            if blocked_by == "JEV":
-                action = "vetoed by JEV"
+            if blocked_by.startswith("JEV"):
+                action = f"vetoed by {blocked_by}"
             else:
                 action = "vetoed" if verdict == "veto" else f"skipped after review ({verdict})"
         self.journal.decision(symbol=sym, strategy=sig.strategy, params=sig.meta.get("params"), target=sig.target,
                               price=price, signal_reason=sig.reason[:500], risk_notes=dec.notes,
-                              llm_verdict=verdict, llm_note=note, action=action, jev_p=jev_p, jev_note=jev_note)
+                              llm_verdict=verdict, llm_note=note, action=action, jev_p=jev_p,
+                              jev_note=" | ".join(x for x in (jev_note, check_note) if x) or None)
         return {"strategy": repr(strat), "target": sig.target, "price": price, "action": action,
                 "notes": dec.notes, "llm": verdict or None}
 
@@ -243,6 +254,42 @@ class Engine:
                 if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:  # type: ignore[union-attr]
                     dec.order = None
         return sid, v.p, note
+
+    def _jev_checks(self, sym: str, sig: Signal, pos: Any, df: pd.DataFrame, price: float,
+                    now: datetime) -> tuple[bool, str]:
+        """Returns (block_new_risk, note). In act mode may also turn the signal flat to exit a position."""
+        ck = self.jev_checks
+        c = ck.c
+        step = timeframe_seconds(self.cfg["timeframe"])
+        cutoff = (now - pd.Timedelta(seconds=step * int(c["horizon_bars"]))).isoformat()
+        self.journal.jev_check_resolve(sym, cutoff, price, now.isoformat())
+        holding = bool(pos and pos.qty)
+        base = {"ts": now.isoformat(), "symbol": sym, "strategy": sig.strategy, "price": price, "mode": c["mode"]}
+        try:
+            r = ck.check(sig, pos if holding else None, df)
+        except Exception as e:  # noqa: BLE001 - checks are advisory
+            self.journal.jev_check(**base, kind="regime", error=str(e)[:300])
+            return False, f"JEV check error: {e}"[:200]
+        want = 1 if sig.target > 0 else -1 if sig.target < 0 else 0
+        block = ck.acting and r.fit_p is not None and r.fit_p < c["regime_block_below"] and want != 0
+        self.journal.jev_check(**base, kind="regime", regime=r.regime, regime_conf=r.regime_conf, p=r.fit_p,
+                               side_sign=want, applied=int(block), cost=r.cost, model=r.model)
+        note = f"regime {r.regime or '?'} · fit {r.fit_p:.0%}"
+        if holding and r.exit_p is not None:
+            side = 1 if pos.qty > 0 else -1
+            close = ck.acting and r.exit_p >= c["exit_above"]
+            self.journal.jev_check(**base, kind="exit", regime=r.regime, p=r.exit_p, side_sign=side,
+                                   applied=int(close), cost=0.0, model=r.model)
+            note += f" · exit {r.exit_p:.0%}"
+            if close:
+                self.cooldown[sym] = side  # same rule as a stop: no re-entry until the strategy resets
+                sig.target, sig.reason = 0.0, f"JEV exit (p={r.exit_p:.2f}); " + sig.reason
+                self.journal.event("jev", f"{sym}: closing on JEV exit check (p={r.exit_p:.2f})")
+        if not ck.acting:
+            note += " (shadow)"
+        elif block:
+            note += " → standing aside"
+        return block, note
 
     def _jev_outcome(self, sym: str, realized: float, remaining_qty: float) -> None:
         self.journal.jev_add_pnl(sym, realized)

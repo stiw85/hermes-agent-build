@@ -116,6 +116,25 @@ export interface JevBucket {
   pnl: number
 }
 
+export interface CheckBucket {
+  bucket: string
+  n: number
+  avg_fwd_pct: number | null
+  up_share: number | null
+}
+
+export interface JevChecks {
+  mode: 'shadow' | 'act'
+  horizon_bars: number
+  regime_block_below: number
+  exit_above: number
+  checks: number
+  errors: number
+  cost_usd: number
+  regime: { scored: number; buckets: CheckBucket[]; recommendation: string; seen: Record<string, number> }
+  exit: { scored: number; buckets: CheckBucket[]; recommendation: string }
+}
+
 export interface JevReport {
   enabled: boolean
   /** set when JEV is enabled but could not start (e.g. missing key); the bot trades without it */
@@ -135,6 +154,7 @@ export interface JevReport {
   what_if_gate_pnl?: number
   by_regime?: Record<string, { trades: number; wins: number; pnl: number }>
   recommendation?: string
+  checks?: JevChecks
   recent?: { ts: string; symbol: string; side: string; strategy: string; p: number | null; regime: string | null; verdict: string | null; applied: number; taken: number; outcome_pnl: number | null; closed_ts: string | null; error: string | null }[]
 }
 
@@ -200,6 +220,7 @@ export interface Candles {
   snapshot: Snapshot
   strategy: BookEntry
   fills: { ts: string; side: 'buy' | 'sell'; qty: number; price: number; strategy: string; realized_pnl: number | null }[]
+  jev?: { ts: string; regime: string | null; regime_conf: number | null; p: number | null; mode: string; applied: number; error: string | null } | null
 }
 
 export interface Stats {

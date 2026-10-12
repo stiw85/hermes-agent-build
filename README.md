@@ -91,6 +91,17 @@ In `chat`, the agent can also place manual orders. Every one needs you to type `
 4. Check `hermes-trader jev` or the app's **Brain → JEV** tab. They show calibration by probability band, the Brier score against the base rate, P&L by regime, and what gating would have changed. They won't suggest gating until `min_shadow_trades` scored trades have closed and Jev has shown an edge.
 5. Only then set `mode: gate`. Below `veto_below` the entry is skipped, and below `reduce_below` it's halved. Jev never enlarges an order and never sees exits. If Jev is unreachable, `on_error` (default `proceed`) decides what happens.
 
+**Every-bar checks (`jev.checks`, on whenever JEV is on).** Once per bar, for every symbol, a single JEV request also asks:
+- **regime:** trending up, trending down, ranging or volatile.
+- **strategy_fits:** does this strategy's style suit the market right now?
+- **exit_now** (only when holding a position): has the reason to hold gone away?
+
+About 72 calls a day for 3 symbols on 1h bars costs roughly $0.002. Each answer is scored against what price actually did `horizon_bars` later. Price moves whether or not the bot acted, so this scoring keeps working in act mode too. In `mode: act` the checks can only reduce risk:
+- A low fit makes the strategy **stand aside**, meaning no new entries. Existing positions, stops and exits still work.
+- A high exit probability **closes the position**, with no re-entry until the strategy's own signal resets.
+
+The Brain → JEV tab shows the evidence for each check, so you can promote them independently of the entry gate.
+
 OpenRouter works too: set `url: https://openrouter.ai/api/alpha/decisions`, `model: ~typesafe/jev-latest`, `api_key_env: OPENROUTER_API_KEY`.
 
 ## Desktop app

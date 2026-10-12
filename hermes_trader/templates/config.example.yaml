@@ -66,6 +66,13 @@ jev:
   reduce_below: 0.55     # gate: half size below this
   on_error: proceed      # gate mode if Jev is unreachable: proceed | reduce | veto
   min_shadow_trades: 30
+  checks:                # every bar, every symbol, one JEV call: regime, strategy fit, exit (if holding)
+    enabled: true
+    mode: shadow         # shadow | act  (act may only block NEW entries or close positions)
+    regime_block_below: 0.35
+    exit_above: 0.70
+    horizon_bars: 6      # each answer is scored against what price did this many bars later
+    min_resolved: 50
 
 # ---- self-improvement -------------------------------------------------------------
 improve:

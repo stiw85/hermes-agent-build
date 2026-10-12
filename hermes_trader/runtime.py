@@ -133,6 +133,10 @@ def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
         try:
             engine.jev = JevReviewer(JevClient.from_config(cfg["jev"]), cfg["jev"], cfg["timeframe"], engine.journal,
                                      engine.book, lessons)
+            if (cfg["jev"].get("checks") or {}).get("enabled", True):
+                from .jev_checks import JevChecker
+
+                engine.jev_checks = JevChecker(engine.jev.client, cfg["jev"], cfg["timeframe"], lessons)
         except (JevError, ValueError) as e:  # trade without JEV rather than not at all
             jev_error = str(e)
             log.warning("JEV disabled: %s", e)

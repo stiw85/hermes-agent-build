@@ -128,26 +128,32 @@ def questions(side: str) -> dict[str, Any]:
     }
 
 
-def build_state(sig: Signal, dec: RiskDecision, acct: Account, df: pd.DataFrame, timeframe: str,
-                recent: dict[str, Any], lessons: list[str]) -> dict[str, Any]:
-    """Everything numeric is computed here; Jev gets plain facts, not arithmetic to do."""
-    ac = asset_class_of(sig.symbol).value
+def market_facts(symbol: str, df: pd.DataFrame, timeframe: str) -> dict[str, Any]:
+    """Computed market facts for Jev (it judges situations; it doesn't do arithmetic)."""
+    ac = asset_class_of(symbol).value
     snap = market_snapshot(df, timeframe, ac)
-    side = dec.order.side.value if dec.order else ("buy" if sig.target > 0 else "sell")
     last = snap["last"]
     lo, hi = snap["range_100"]
     pos_in_range = (last - lo) / (hi - lo) if hi > lo else 0.5
+    return {
+        "symbol": symbol, "asset_class": ac, "bar_timeframe": timeframe,
+        "trend_vs_sma50_sma200": snap["trend_sma50_200"],
+        "change_last_24_bars_pct": _pct(snap["chg_24"]), "change_last_100_bars_pct": _pct(snap["chg_100"]),
+        "rsi14": snap["rsi14"], "annualised_volatility_pct": _pct(snap["vol_annual"]),
+        "atr_pct_of_price": _pct(snap["atr_pct"]),
+        "position_in_100_bar_range": _label(pos_in_range, [(0.2, "near the low"), (0.4, "lower half"),
+                                                           (0.6, "middle"), (0.8, "upper half")], "near the high"),
+    }
+
+
+def build_state(sig: Signal, dec: RiskDecision, acct: Account, df: pd.DataFrame, timeframe: str,
+                recent: dict[str, Any], lessons: list[str]) -> dict[str, Any]:
+    """Everything numeric is computed here; Jev gets plain facts, not arithmetic to do."""
+    side = dec.order.side.value if dec.order else ("buy" if sig.target > 0 else "sell")
+    last = float(df["close"].iloc[-1])
     stop_dist = (2.0 * sig.atr / last) if sig.atr and last else None
     return {
-        "market": {
-            "symbol": sig.symbol, "asset_class": ac, "bar_timeframe": timeframe,
-            "trend_vs_sma50_sma200": snap["trend_sma50_200"],
-            "change_last_24_bars_pct": _pct(snap["chg_24"]), "change_last_100_bars_pct": _pct(snap["chg_100"]),
-            "rsi14": snap["rsi14"], "annualised_volatility_pct": _pct(snap["vol_annual"]),
-            "atr_pct_of_price": _pct(snap["atr_pct"]),
-            "position_in_100_bar_range": _label(pos_in_range, [(0.2, "near the low"), (0.4, "lower half"),
-                                                               (0.6, "middle"), (0.8, "upper half")], "near the high"),
-        },
+        "market": market_facts(sig.symbol, df, timeframe),
         "proposed_trade": {
             "side": side, "strategy": sig.strategy, "strategy_style": STRATEGY_STYLE.get(sig.strategy, sig.strategy),
             "signal": sig.reason[:300], "stop_distance_pct": _pct(stop_dist),
