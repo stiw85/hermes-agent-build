@@ -1,0 +1,6 @@
+Hermes Trader is derived from Hermes Agent (https://github.com/NousResearch/hermes-agent),
+Copyright (c) 2025 Nous Research, released under the MIT License.
+
+This branch is a ground-up trading-only rebuild. It keeps Hermes's design ideas
+(model-agnostic tool-calling loop, curated MEMORY -> LESSONS.md, SKILL.md playbooks,
+background self-review, SOUL.md persona, scheduled jobs) and drops everything else.

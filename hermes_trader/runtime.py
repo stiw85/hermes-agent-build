@@ -1,0 +1,124 @@
+"""Wires config -> broker, engine, improver, memory, LLM agent, notifier. Plus the run-forever scheduler."""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+import requests
+
+from .agent import LLM, Agent, Lessons, Playbooks, Toolkit, make_reviewer, reflect
+from .backtest import timeframe_seconds
+from .brokers import make_broker
+from .config import Config
+from .engine import Engine
+from .improve import Improver
+
+log = logging.getLogger("hermes_trader")
+
+BUNDLED_PLAYBOOKS = Path(__file__).resolve().parent / "playbooks"
+
+
+def telegram_notifier(cfg: Config) -> Callable[[str], None]:
+    n = cfg["notify"]
+    token, chat = cfg.secret(n["telegram_token_env"]), cfg.secret(n["telegram_chat_id_env"])
+    if not token or not chat:
+        return lambda msg: log.info("notify: %s", msg)
+
+    def send(msg: str) -> None:
+        tag = "LIVE" if cfg.is_live else "PAPER"
+        try:
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          json={"chat_id": chat, "text": f"[{tag}] {msg}"[:4000]}, timeout=10)
+        except requests.RequestException as e:  # notifications must never break trading
+            log.warning("telegram failed: %s", e)
+
+    return send
+
+
+@dataclass
+class App:
+    cfg: Config
+    engine: Engine
+    improver: Improver
+    toolkit: Toolkit
+    agent: Agent | None
+    notify: Callable[[str], None]
+
+    def improve_all(self, promote: bool = True) -> list[dict[str, Any]]:
+        out = []
+        for sym in self.engine.symbols:
+            try:
+                df = self.engine.broker.fetch_ohlcv(sym, self.cfg["timeframe"], self.cfg["improve"]["lookback_bars"])
+                rep = self.improver.run(sym, df, self.engine.book, promote=promote).to_dict()
+            except Exception as e:  # noqa: BLE001
+                rep = {"symbol": sym, "error": str(e)}
+            if rep.get("promoted"):
+                b = rep["best"]
+                msg = f"{sym}: promoted {b['strategy']}{b['params']} ({rep['reason']})"
+                self.engine.journal.event("promote", msg, rep)
+                self.notify("🧠 " + msg)
+            out.append(rep)
+        self.engine.meta["last_improve"] = datetime.now(timezone.utc).isoformat()
+        self.engine.save()
+        return out
+
+    def maybe_reflect(self) -> str | None:
+        if not self.agent:
+            return None
+        j = self.engine.journal
+        done = self.engine.meta.get("reflected_at_closed_trades", 0)
+        if j.closed_trade_count() - done < self.cfg["improve"]["reflect_after_trades"]:
+            return None
+        try:
+            out = reflect(self.agent)
+            self.notify("🪞 Reflection:\n" + out[:1500])
+            return out
+        except Exception as e:  # noqa: BLE001
+            log.warning("reflection failed: %s", e)
+            return None
+
+    def run_forever(self, once: bool = False) -> None:
+        tf_s = timeframe_seconds(self.cfg["timeframe"])
+        every = (self.cfg["schedule"].get("cycle_minutes") or tf_s / 60) * 60
+        improve_every = self.cfg["schedule"]["improve_every_hours"] * 3600
+        self.notify(f"Hermes Trader started: {self.cfg['mode']} via {self.engine.broker.name}, "
+                    f"{', '.join(self.engine.symbols)} @ {self.cfg['timeframe']}")
+        while True:
+            last_imp = self.engine.meta.get("last_improve")
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(last_imp)).total_seconds() if last_imp else 1e12
+            if age >= improve_every:
+                self.improve_all()
+            rep = self.engine.cycle()
+            log.info("cycle: %s", {s: v.get("action") for s, v in rep["symbols"].items()})
+            self.maybe_reflect()
+            if once:
+                return
+            now = time.time()
+            nxt = (now // every + 1) * every + 5  # 5s after bar close so the venue has the candle
+            time.sleep(max(1.0, nxt - now))
+
+
+def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
+          on_event: Callable[[str, Any], None] | None = None) -> App:
+    broker = make_broker(cfg)
+    notify = telegram_notifier(cfg)
+    engine = Engine(cfg, broker, notify=notify)
+    b = cfg["broker"]
+    improver = Improver(cfg["improve"], fee_bps=b["fee_bps"], slippage_bps=b["slippage_bps"],
+                        timeframe=cfg["timeframe"], allow_short=cfg["allow_short"])
+    lessons = Lessons(cfg.home / "LESSONS.md")
+    playbooks = Playbooks(cfg.home / "playbooks", [BUNDLED_PLAYBOOKS])
+    toolkit = Toolkit(engine, improver, lessons, playbooks, confirm=confirm)
+    agent = None
+    lc = cfg["llm"]
+    if lc.get("enabled"):
+        llm = LLM.from_config(lc)
+        agent = Agent(llm, toolkit, lc.get("max_tool_iterations", 12), on_event)
+        if lc.get("trade_review", True):
+            engine.reviewer = make_reviewer(llm, toolkit)
+    return App(cfg, engine, improver, toolkit, agent, notify)

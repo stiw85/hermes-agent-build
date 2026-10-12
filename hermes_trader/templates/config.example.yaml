@@ -1,0 +1,66 @@
+# Hermes Trader configuration. Secrets (API keys) go in .env, never here.
+mode: paper            # paper | live  (live also needs HERMES_TRADER_LIVE=I_UNDERSTAND_REAL_MONEY)
+home: ./data           # journal, strategy book, lessons, playbooks, broker state
+
+# ---- broker -----------------------------------------------------------------
+# paper  : simulated fills. data_source = synthetic | csv | ccxt (real crypto prices, no keys) | alpaca
+# ccxt   : real crypto exchange. paper mode REQUIRES sandbox: true (exchange testnet)
+# alpaca : US stocks/ETFs + crypto. paper mode uses Alpaca's free paper account
+broker:
+  name: paper
+  data_source: synthetic
+  starting_cash: 10000
+  fee_bps: 10          # used by paper fills AND backtests: keep realistic
+  slippage_bps: 5
+  exchange: binance    # ccxt id: binance, bybit, kraken, okx, coinbase, ...
+  sandbox: true
+  stock_feed: iex      # alpaca: iex (free) | sip (paid)
+  crypto_feed: us
+  csv_dir: ./data/csv
+
+# crypto pairs use a slash (BTC/USDT, or BTC/USD on Alpaca); stocks are bare tickers (SPY, AAPL)
+symbols: [BTC/USDT, ETH/USDT]
+timeframe: 1h          # 1m 5m 15m 1h 4h 1d
+history_bars: 500
+allow_short: false     # spot/cash accounts: keep false
+
+default_strategy:      # used until the optimizer promotes something better
+  name: sma_cross
+  params: {fast: 20, slow: 50}
+
+# ---- hard risk limits (the LLM cannot change these) -----------------------------
+risk:
+  max_position_pct: 0.20
+  max_gross_exposure_pct: 0.80
+  max_order_notional: 2500
+  min_order_notional: 10
+  risk_per_trade_pct: 0.01
+  atr_stop_mult: 2.0
+  max_daily_loss_pct: 0.03
+  max_drawdown_pct: 0.15
+  rebalance_threshold: 0.10
+  max_trades_per_day: 20
+
+# ---- LLM brain (optional; the bot trades fine without it) -------------------------
+llm:
+  enabled: false
+  base_url: https://openrouter.ai/api/v1   # or http://localhost:11434/v1 for Ollama
+  model: nousresearch/hermes-4-70b
+  api_key_env: LLM_API_KEY
+  trade_review: true     # LLM may shrink or veto new risk, never enlarge it
+  max_tool_iterations: 12
+
+# ---- self-improvement -------------------------------------------------------------
+improve:
+  lookback_bars: 2000
+  train_fraction: 0.7
+  min_trades: 8
+  min_improvement: 0.10
+  max_drawdown: 0.25
+  max_candidates: 60
+  strategies: [sma_cross, ema_cross, rsi_reversion, donchian_breakout, bollinger_reversion, trend_rsi]
+  reflect_after_trades: 10
+
+schedule:
+  cycle_minutes: null    # null = every bar close of `timeframe`
+  improve_every_hours: 24
