@@ -60,6 +60,18 @@ DEFAULTS: dict[str, Any] = {
         "on_review_error": "reduce",  # reduce (x0.5) | veto | proceed - when the LLM is down or replies garbage
         "max_tool_iterations": 12,
     },
+    "jev": {
+        "enabled": False,
+        "mode": "shadow",  # shadow: score + journal only | gate: may shrink/veto new entries
+        "url": "https://api.typesafe.ai/v1/systemone",  # or https://openrouter.ai/api/alpha/decisions
+        "model": "jev-latest",  # OpenRouter: ~typesafe/jev-latest
+        "api_key_env": "TYPESAFE_API_KEY",  # OpenRouter: OPENROUTER_API_KEY
+        "timeout": 20,
+        "veto_below": 0.40,  # gate: P(worth taking) below this -> skip the entry
+        "reduce_below": 0.55,  # gate: below this -> half size
+        "on_error": "proceed",  # gate mode when Jev is unreachable: proceed | reduce | veto
+        "min_shadow_trades": 30,  # report won't suggest gating before this many scored trades have closed
+    },
     "improve": {
         "lookback_bars": 2000,
         "train_fraction": 0.7,

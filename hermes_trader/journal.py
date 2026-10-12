@@ -26,7 +26,13 @@ CREATE TABLE IF NOT EXISTS fills (
 );
 CREATE TABLE IF NOT EXISTS equity (ts TEXT, equity REAL, cash REAL, gross_exposure REAL);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts TEXT, kind TEXT, message TEXT, data TEXT);
+CREATE TABLE IF NOT EXISTS jev_scores (
+  id INTEGER PRIMARY KEY, ts TEXT, symbol TEXT, side TEXT, strategy TEXT, p REAL, regime TEXT,
+  regime_conf REAL, verdict TEXT, mode TEXT, applied INTEGER, cost REAL, model TEXT, error TEXT,
+  taken INTEGER DEFAULT 0, order_id TEXT, outcome_pnl REAL, closed_ts TEXT
+);
 CREATE INDEX IF NOT EXISTS ix_fills_symbol ON fills(symbol);
+CREATE INDEX IF NOT EXISTS ix_jev_open ON jev_scores(symbol, taken, closed_ts);
 CREATE INDEX IF NOT EXISTS ix_events_kind ON events(kind);
 """
 
@@ -39,6 +45,15 @@ class Journal:
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()  # one connection shared by the bot thread and API threads
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a journal was created (old journals keep working)."""
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(decisions)")}
+        for name, typ in (("jev_p", "REAL"), ("jev_note", "TEXT")):
+            if name not in cols:
+                self.db.execute(f"ALTER TABLE decisions ADD COLUMN {name} {typ}")
+        self.db.commit()
 
     def _ins(self, table: str, row: dict[str, Any]) -> int:
         row = {"ts": utcnow().isoformat(), **row}
@@ -108,6 +123,31 @@ class Journal:
             "equity_last": curve[-1] if curve else None,
             "max_drawdown": round(mdd, 4),
         }
+
+    # ---- JEV scores ------------------------------------------------------
+    def jev_score(self, **row: Any) -> int:
+        return self._ins("jev_scores", row)
+
+    def jev_mark_taken(self, score_id: int, order_id: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE jev_scores SET taken=1, order_id=? WHERE id=?", (order_id, score_id))
+            self.db.commit()
+
+    def jev_add_pnl(self, symbol: str, pnl: float) -> None:
+        """Realised P&L of a closing fill counts toward every still-open scored entry on that symbol."""
+        with self.lock:
+            self.db.execute("UPDATE jev_scores SET outcome_pnl = COALESCE(outcome_pnl, 0) + ? "
+                            "WHERE symbol=? AND taken=1 AND closed_ts IS NULL", (pnl, symbol))
+            self.db.commit()
+
+    def jev_close(self, symbol: str) -> None:
+        with self.lock:
+            self.db.execute("UPDATE jev_scores SET closed_ts=?, outcome_pnl=COALESCE(outcome_pnl, 0) "
+                            "WHERE symbol=? AND taken=1 AND closed_ts IS NULL", (utcnow().isoformat(), symbol))
+            self.db.commit()
+
+    def jev_rows(self, n: int = 5000) -> list[dict[str, Any]]:
+        return self.rows("SELECT * FROM jev_scores ORDER BY id DESC LIMIT ?", (n,))
 
     def close(self) -> None:
         self.db.close()

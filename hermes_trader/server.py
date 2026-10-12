@@ -37,7 +37,7 @@ log = logging.getLogger("hermes_trader.server")
 
 TOKEN_ENV = "HERMES_TRADER_API_TOKEN"
 EXIT_ON_EOF_ENV = "HERMES_TRADER_EXIT_ON_STDIN_EOF"  # set by the desktop app: exit when it goes away
-CHAT_TOOLS = ["get_portfolio", "market_snapshot", "list_strategies", "strategy_book", "run_backtest", "optimize",
+CHAT_TOOLS = ["get_portfolio", "jev_report", "market_snapshot", "list_strategies", "strategy_book", "run_backtest", "optimize",
               "promote_strategy", "rollback_strategy", "journal_stats", "recent_trades", "recent_decisions",
               "memory", "playbook"]
 
@@ -176,6 +176,7 @@ class Service:
             "symbols": list(cfg["symbols"]),
             "timeframe": cfg["timeframe"],
             "llm_enabled": bool(self.app.agent),
+            "jev_mode": cfg["jev"]["mode"] if cfg["jev"].get("enabled") else "off",
             "allow_short": cfg["allow_short"],
             "day_pnl": round(eq - sod, 2),
             "day_pnl_pct": round(eq / sod - 1, 5) if sod else 0.0,
@@ -197,9 +198,20 @@ class Service:
             "positions": {}, "risk": e.state.to_dict(), "strategies": {s: e.book.entry(s).get("strategy") for s in e.symbols},
             "last_cycle": e.meta.get("last_cycle"), "version": __version__, "symbols": list(cfg["symbols"]),
             "timeframe": cfg["timeframe"], "llm_enabled": bool(self.app.agent), "allow_short": cfg["allow_short"],
+            "jev_mode": cfg["jev"]["mode"] if cfg["jev"].get("enabled") else "off",
             "day_pnl": None, "day_pnl_pct": None, "drawdown_pct": None, "realized_pnl": None, "closed_trades": None,
             "bot": self.bot_state(), "busy": True,
         })
+
+    def jev(self, q: dict[str, str]) -> dict[str, Any]:
+        from .jev import report
+
+        jc = self.app.cfg["jev"]
+        rows = self.app.engine.journal.jev_rows()
+        recent = [{k: r.get(k) for k in ("ts", "symbol", "side", "strategy", "p", "regime", "verdict", "applied",
+                                         "taken", "outcome_pnl", "closed_ts", "error")}
+                  for r in rows[: min(int(q.get("n", 50)), 500)]]
+        return {"enabled": bool(jc.get("enabled")), **report(rows, jc), "recent": recent}
 
     def config(self) -> dict[str, Any]:
         raw = self.app.cfg.raw
@@ -208,6 +220,7 @@ class Service:
         out = {k: raw[k] for k in keep}
         out["broker"] = {k: v for k, v in raw["broker"].items() if k not in ("csv_dir",)}
         out["llm"] = {k: v for k, v in raw["llm"].items() if k != "api_key_env"}
+        out["jev"] = {k: v for k, v in raw["jev"].items() if k != "api_key_env"}
         out["home"] = str(self.app.cfg.home)
         out["config_path"] = str(self.app.cfg.path) if self.app.cfg.path else None
         return out
@@ -317,6 +330,7 @@ def make_handler(svc: Service, token: str, port_ref: list[int]) -> type[BaseHTTP
         "/api/playbooks": lambda q: svc.app.toolkit.playbooks.index(),
         "/api/playbook": lambda q: {"name": q.get("name"), "text": svc.app.toolkit.playbooks.view(q.get("name", ""))},
         "/api/config": lambda q: clean(svc.config()),
+        "/api/jev": lambda q: clean(svc.jev(q)),
     }
     POST: dict[str, Callable[[dict[str, Any]], Any]] = {
         "/api/bot/start": lambda b: svc.start_bot(),

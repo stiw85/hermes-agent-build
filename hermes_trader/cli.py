@@ -66,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("reflect", help="run an LLM self-review now")
     ch = sub.add_parser("chat", help="talk to the trading agent")
     ch.add_argument("message", nargs="*")
+    jv = sub.add_parser("jev", help="JEV decision-model report (shadow/gate calibration)")
+    jv.add_argument("--test", action="store_true", help="make one live JEV call to check the key and endpoint")
     sv = sub.add_parser("serve", help="local API for the desktop app (127.0.0.1 only)")
     sv.add_argument("--port", type=int, default=8765, help="0 = pick a free port")
     sv.add_argument("--run", action="store_true", help="start the trading loop immediately")
@@ -151,6 +153,25 @@ def main(argv: list[str] | None = None) -> int:
                     break
                 if msg:
                     print("\nhermes>", app.agent.run(msg, keep_history=True))
+    elif a.cmd == "jev":
+        from .jev import JevClient, JevReviewer, report
+
+        jc = cfg["jev"]
+        if a.test:
+            rev = JevReviewer(JevClient.from_config(jc), {**jc, "mode": jc.get("mode", "shadow")})
+            sym = e.symbols[0]
+            df = e.broker.fetch_ohlcv(sym, cfg["timeframe"], 300)
+            from .jev import build_state
+            from .models import Order, Side
+            from .risk import RiskDecision
+
+            sig = e.book.strategy_for(sym).signal(sym, df)
+            dec = RiskDecision(Order(sym, Side.BUY, 1.0), True, [], 1000.0, 0.0)
+            v = rev.score(build_state(sig, dec, e.broker.account(e.symbols), df, cfg["timeframe"], {}, []), "buy")
+            _p({"ok": True, "endpoint": jc["url"], "model": v.model, "symbol": sym, "p_worth_taking_long": v.p,
+                "regime": v.regime, "gate_would": v.verdict, "cost_usd": v.cost})
+        else:
+            _p({"enabled": bool(jc.get("enabled")), **report(e.journal.jev_rows(), jc)})
     elif a.cmd == "serve":
         from .server import serve
 

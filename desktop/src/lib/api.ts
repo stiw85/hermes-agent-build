@@ -57,6 +57,7 @@ export interface Status {
   symbols: string[]
   timeframe: string
   llm_enabled: boolean
+  jev_mode: 'off' | 'shadow' | 'gate'
   allow_short: boolean
   day_pnl: number | null
   day_pnl_pct: number | null
@@ -103,6 +104,36 @@ export interface Decision {
   llm_verdict: string
   llm_note: string
   action: string
+  jev_p: number | null
+  jev_note: string | null
+}
+
+export interface JevBucket {
+  bucket: string
+  trades: number
+  win_rate: number | null
+  avg_p: number | null
+  pnl: number
+}
+
+export interface JevReport {
+  enabled: boolean
+  mode?: 'shadow' | 'gate'
+  veto_below?: number
+  reduce_below?: number
+  scored?: number
+  taken?: number
+  resolved?: number
+  open?: number
+  errors?: number
+  cost_usd?: number
+  brier?: number | null
+  brier_base_rate?: number | null
+  buckets?: JevBucket[]
+  what_if_gate_pnl?: number
+  by_regime?: Record<string, { trades: number; wins: number; pnl: number }>
+  recommendation?: string
+  recent?: { ts: string; symbol: string; side: string; strategy: string; p: number | null; regime: string | null; verdict: string | null; applied: number; taken: number; outcome_pnl: number | null; closed_ts: string | null; error: string | null }[]
 }
 
 export interface EventRow {

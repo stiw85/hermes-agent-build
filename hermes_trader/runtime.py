@@ -125,6 +125,11 @@ def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
     lessons = Lessons(cfg.home / "LESSONS.md")
     playbooks = Playbooks(cfg.home / "playbooks", [BUNDLED_PLAYBOOKS])
     toolkit = Toolkit(engine, improver, lessons, playbooks, confirm=confirm)
+    if cfg["jev"].get("enabled"):
+        from .jev import JevClient, JevReviewer
+
+        engine.jev = JevReviewer(JevClient.from_config(cfg["jev"]), cfg["jev"], cfg["timeframe"], engine.journal,
+                                 engine.book, lessons)
     agent = None
     lc = cfg["llm"]
     if lc.get("enabled"):

@@ -52,6 +52,21 @@ llm:
   on_review_error: reduce  # LLM down / garbage reply: reduce (half size) | veto | proceed
   max_tool_iterations: 12
 
+# ---- JEV decision model (TypeSafe; optional) ----------------------------------------------
+# Scores every new entry with a calibrated probability that it is worth taking.
+# Start in shadow mode: it changes nothing, and `hermes-trader jev` / the Brain page show whether
+# its confident calls actually win. Switch to gate only once the report shows an edge.
+jev:
+  enabled: false
+  mode: shadow           # shadow | gate  (gate can only shrink or veto entries, never enlarge or block exits)
+  url: https://api.typesafe.ai/v1/systemone   # OpenRouter: https://openrouter.ai/api/alpha/decisions
+  model: jev-latest                           # OpenRouter: ~typesafe/jev-latest
+  api_key_env: TYPESAFE_API_KEY               # OpenRouter: OPENROUTER_API_KEY
+  veto_below: 0.40       # gate: skip entries Jev rates below this
+  reduce_below: 0.55     # gate: half size below this
+  on_error: proceed      # gate mode if Jev is unreachable: proceed | reduce | veto
+  min_shadow_trades: 30
+
 # ---- self-improvement -------------------------------------------------------------
 improve:
   lookback_bars: 2000

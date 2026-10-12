@@ -61,7 +61,7 @@ def test_auth_and_host_guard(api):
 def test_read_endpoints(api):
     call, svc, app = api
     for path in ["/api/status", "/api/equity", "/api/fills", "/api/decisions", "/api/events", "/api/stats",
-                 "/api/book", "/api/strategies", "/api/lessons", "/api/playbooks", "/api/config",
+                 "/api/book", "/api/strategies", "/api/lessons", "/api/playbooks", "/api/config", "/api/jev",
                  "/api/playbook?name=regime-check"]:
         status, body = call("GET", path)
         assert status == 200 and body["ok"], (path, body)

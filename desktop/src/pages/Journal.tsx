@@ -57,6 +57,7 @@ function Decisions({ rows }: { rows: Decision[] }) {
           <th className={th}>Symbol</th>
           <th className={cn(th, 'text-right')}>Target</th>
           <th className={cn(th, 'pl-4')}>Action</th>
+          <th className={th}>JEV</th>
           <th className={th}>LLM</th>
           <th className={th}>Why</th>
         </tr>
@@ -68,6 +69,15 @@ function Decisions({ rows }: { rows: Decision[] }) {
             <td className="py-2 text-fg">{d.symbol}</td>
             <td className="py-2 text-right">{d.target >= 0 ? '+' : ''}{d.target.toFixed(2)}</td>
             <td className={cn('py-2 pl-4', d.action.startsWith('buy') ? 'text-ok' : d.action.startsWith('sell') ? 'text-danger' : 'text-fg-2')}>{d.action}</td>
+            <td className="py-2">
+              {d.jev_p != null ? (
+                <span className={cn('tabular', d.jev_p < 0.4 ? 'text-danger' : d.jev_p < 0.55 ? 'text-warn' : 'text-ok')} title={d.jev_note ?? ''}>
+                  {Math.round(d.jev_p * 100)}%
+                </span>
+              ) : (
+                <span className="text-fg-4" title={d.jev_note ?? ''}>{d.jev_note ? '!' : '—'}</span>
+              )}
+            </td>
             <td className="py-2">{d.llm_verdict ? <Pill tone={d.llm_verdict === 'veto' ? 'danger' : d.llm_verdict === 'reduce' ? 'warn' : d.llm_verdict === 'error' ? 'warn' : 'ok'} title={d.llm_note}>{d.llm_verdict}</Pill> : <span className="text-fg-4">—</span>}</td>
             <td className="selectable max-w-[460px] py-2 text-[11.5px] text-fg-3">
               <div className="truncate" title={d.signal_reason}>{d.signal_reason}</div>

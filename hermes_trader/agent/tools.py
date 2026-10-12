@@ -94,6 +94,9 @@ class Toolkit:
             "recent_decisions": ("Most recent per-bar decisions incl. risk notes and LLM verdicts.",
                                  _schema({"n": {"type": "integer"}}),
                                  lambda n=20: self.e.journal.recent_decisions(min(int(n), 100))),
+            "jev_report": ("How well the JEV decision model's entry probabilities matched real outcomes "
+                           "(calibration buckets, Brier score, what gating would have changed).",
+                           _schema({}), self.jev_report),
             "memory": ("Curated lessons. action=add(text) | replace(old,text) | remove(old) | view.",
                        _schema({"action": {"type": "string", "enum": ["add", "replace", "remove", "view"]},
                                 "text": {"type": "string"}, "old": {"type": "string"}}, ["action"]),
@@ -177,6 +180,14 @@ class Toolkit:
                                                                "why": why[:300]}, source="agent")
         self.e.journal.event("promote", f"{symbol}: {strategy}{params} ({reason})", {"why": why})
         return {"promoted": True, "reason": reason, "version": entry["version"]}
+
+    def jev_report(self) -> dict:
+        from ..jev import report
+
+        jc = self.cfg["jev"]
+        if not jc.get("enabled"):
+            return {"enabled": False}
+        return {"enabled": True, **report(self.e.journal.jev_rows(), jc)}
 
     def memory(self, action: str, text: str = "", old: str = "") -> str:
         if action == "view":

@@ -81,6 +81,18 @@ hermes-trader lessons               # what it has learned
 ```
 In `chat`, the agent can also place manual orders. Every one needs you to type `yes`, and the risk caps still apply.
 
+## JEV decision model (optional)
+
+[TypeSafe's Jev](https://openrouter.ai/docs/guides/community/jev) is a non-generative decision model that returns calibrated probabilities. Here it scores every new entry: *is this entry worth taking?* It also labels the market regime. The bot computes all the numbers itself and sends Jev the facts.
+
+1. Put `TYPESAFE_API_KEY=...` in `.env`. In `config.yaml`, set `jev: {enabled: true, mode: shadow}`.
+2. Run `hermes-trader jev --test` to make one live call and confirm the key and endpoint work.
+3. Let it run in **shadow** mode, which scores entries but changes nothing. Each scored entry's outcome is recorded when the position closes.
+4. Check `hermes-trader jev` or the app's **Brain → JEV** tab. They show calibration by probability band, the Brier score against the base rate, P&L by regime, and what gating would have changed. They won't suggest gating until `min_shadow_trades` scored trades have closed and Jev has shown an edge.
+5. Only then set `mode: gate`. Below `veto_below` the entry is skipped, and below `reduce_below` it's halved. Jev never enlarges an order and never sees exits. If Jev is unreachable, `on_error` (default `proceed`) decides what happens.
+
+OpenRouter works too: set `url: https://openrouter.ai/api/alpha/decisions`, `model: ~typesafe/jev-latest`, `api_key_env: OPENROUTER_API_KEY`.
+
 ## Desktop app
 
 <p align="center"><img src="desktop/docs/overview.png" alt="Hermes Trader desktop: overview" width="100%"></p>
@@ -105,6 +117,7 @@ See [desktop/README.md](desktop/README.md) for connection modes (the app starts 
 | `flatten` / `halt` / `resume` | Emergency controls |
 | `rollback SYMBOL` | Revert to the previous strategy version |
 | `chat` / `reflect` | Talk to the agent / run a self-review |
+| `jev [--test]` | JEV calibration report / one live test call |
 | `serve [--port N] [--run]` | Local API for the desktop app (127.0.0.1 only, token auth); `--run` starts trading immediately |
 | `download SYMBOL --bars N` | Save history to CSV (`data_source: csv`) |
 

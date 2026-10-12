@@ -11,7 +11,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 import pandas as pd
 
@@ -26,6 +26,15 @@ from .risk import RiskDecision, RiskManager, RiskState
 log = logging.getLogger("hermes_trader.engine")
 
 Reviewer = Callable[[Signal, RiskDecision, Account, pd.DataFrame], dict[str, Any]]
+
+
+class EntryScorer(Protocol):
+    """Duck type for a calibrated entry scorer such as jev.JevReviewer."""
+
+    gating: bool
+    c: dict[str, Any]
+
+    def review(self, sig: Signal, dec: RiskDecision, acct: Account, df: pd.DataFrame) -> Any: ...
 Notifier = Callable[[str], None]
 
 
@@ -55,13 +64,14 @@ def closed_bars(df: pd.DataFrame, timeframe: str, now: datetime) -> pd.DataFrame
 class Engine:
     def __init__(self, cfg: Config, broker: Broker, journal: Journal | None = None,
                  book: StrategyBook | None = None, reviewer: Reviewer | None = None,
-                 notify: Notifier | None = None) -> None:
+                 notify: Notifier | None = None, jev: EntryScorer | None = None) -> None:
         self.cfg = cfg
         self.broker = broker
         self.journal = journal or Journal(cfg.home / "journal.sqlite")
         self.book = book or StrategyBook(cfg.home / "strategy_book.yaml", cfg["default_strategy"])
         self.risk = RiskManager(cfg["risk"], allow_short=cfg["allow_short"])
         self.reviewer = reviewer
+        self.jev = jev
         self.notify = notify or (lambda msg: None)
         self.state_path: Path = cfg.home / "engine_state.json"
         raw = json.loads(self.state_path.read_text()) if self.state_path.is_file() else {}
@@ -143,6 +153,12 @@ class Engine:
 
         dec = self.risk.size(sig, acct, price, level)
         verdict, note = "", ""
+        blocked_by = ""
+        jev_id, jev_p, jev_note = None, None, ""
+        if dec.order and self.jev and self._adds_risk(dec):
+            jev_id, jev_p, jev_note = self._jev_review(sig, dec, acct, df, price)
+            if dec.order is None:
+                blocked_by = "JEV"
         if dec.order and self.reviewer and self._adds_risk(dec):
             try:
                 rv = self.reviewer(sig, dec, acct, df)
@@ -154,6 +170,7 @@ class Engine:
                 verdict, note = "error", f"review failed ({on_err}, x{mult}): {e}"[:300]
             if mult <= 0:
                 dec.order, verdict = None, "veto" if verdict != "error" else verdict
+                blocked_by = "LLM"
             elif mult < 1.0:
                 dec.order.qty *= mult
                 if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:
@@ -175,6 +192,10 @@ class Engine:
             self.journal.fill(order_id=fill.order_id, symbol=sym, side=fill.side.value, qty=fill.qty,
                               price=fill.price, fee=fill.fee, status=fill.status, strategy=sig.strategy,
                               reason=sig.reason[:500], realized_pnl=realized)
+            if jev_id and fill.status in ("filled", "accepted"):
+                self.journal.jev_mark_taken(jev_id, fill.order_id)
+            if realized is not None:
+                self._jev_outcome(sym, realized, abs(pos.qty) - fill.qty)  # type: ignore[union-attr]
             if fill.status in ("filled", "accepted"):
                 self.state.trades_today += 1
             if fill.status == "filled":
@@ -183,12 +204,50 @@ class Engine:
             elif fill.status == "rejected":
                 self.journal.event("reject", f"{sym}: {fill.raw.get('error', fill.raw)}")
         elif dec.approved:  # risk approved an order but review removed it
-            action = "vetoed" if verdict == "veto" else f"skipped after review ({verdict})"
+            if blocked_by == "JEV":
+                action = "vetoed by JEV"
+            else:
+                action = "vetoed" if verdict == "veto" else f"skipped after review ({verdict})"
         self.journal.decision(symbol=sym, strategy=sig.strategy, params=sig.meta.get("params"), target=sig.target,
                               price=price, signal_reason=sig.reason[:500], risk_notes=dec.notes,
-                              llm_verdict=verdict, llm_note=note, action=action)
+                              llm_verdict=verdict, llm_note=note, action=action, jev_p=jev_p, jev_note=jev_note)
         return {"strategy": repr(strat), "target": sig.target, "price": price, "action": action,
                 "notes": dec.notes, "llm": verdict or None}
+
+    def _jev_review(self, sig: Signal, dec: RiskDecision, acct: Account, df: pd.DataFrame,
+                    price: float) -> tuple[int | None, float | None, str]:
+        """Score an entry with JEV. Shadow: record only. Gate: may shrink or veto (never enlarge)."""
+        jc = self.jev.c  # type: ignore[union-attr]
+        gating = self.jev.gating  # type: ignore[union-attr]
+        side = dec.order.side.value  # type: ignore[union-attr]
+        base = {"symbol": sig.symbol, "side": side, "strategy": sig.strategy, "mode": jc.get("mode", "shadow")}
+        try:
+            v = self.jev.review(sig, dec, acct, df)  # type: ignore[union-attr]
+        except Exception as e:  # noqa: BLE001 - JEV is an optional filter
+            sid = self.journal.jev_score(**base, error=str(e)[:300], applied=0, taken=0)
+            on_err = jc.get("on_error", "proceed")
+            if gating and on_err == "veto":
+                dec.order = None
+            elif gating and on_err == "reduce":
+                dec.order.qty *= 0.5  # type: ignore[union-attr]
+            return sid, None, f"JEV error ({on_err if gating else 'shadow'}): {e}"[:300]
+        applied = gating and v.mult < 1.0
+        sid = self.journal.jev_score(**base, p=v.p, regime=v.regime, regime_conf=v.regime_conf, verdict=v.verdict,
+                                     applied=int(applied), cost=v.cost, model=v.model, taken=0)
+        note = f"JEV p={v.p:.2f}{' · ' + v.regime if v.regime else ''} → {v.verdict}{'' if gating else ' (shadow)'}"
+        if applied:
+            if v.mult <= 0:
+                dec.order = None
+            else:
+                dec.order.qty *= v.mult  # type: ignore[union-attr]
+                if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:  # type: ignore[union-attr]
+                    dec.order = None
+        return sid, v.p, note
+
+    def _jev_outcome(self, sym: str, realized: float, remaining_qty: float) -> None:
+        self.journal.jev_add_pnl(sym, realized)
+        if remaining_qty <= 1e-12:
+            self.journal.jev_close(sym)
 
     @staticmethod
     def _adds_risk(dec: RiskDecision) -> bool:
@@ -209,6 +268,8 @@ class Engine:
                 if f.status == "filled" else None
             self.journal.fill(order_id=f.order_id, symbol=sym, side=f.side.value, qty=f.qty, price=f.price,
                               fee=f.fee, status=f.status, strategy="flatten", reason=reason, realized_pnl=realized)
+            if realized is not None:
+                self._jev_outcome(sym, realized, abs(p.qty) - f.qty)
             out.append(f.to_dict())
         self.journal.event("flatten", reason, out)
         return out

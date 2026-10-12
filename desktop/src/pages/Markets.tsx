@@ -186,6 +186,7 @@ export function MarketsPage() {
                       <div className="selectable truncate text-[11px] text-fg-3" title={`${d.signal_reason}\n${d.risk_notes}${d.llm_note ? `\nLLM: ${d.llm_note}` : ''}`}>
                         target {d.target >= 0 ? '+' : ''}
                         {d.target.toFixed(2)}
+                        {d.jev_p != null && ` · JEV ${Math.round(d.jev_p * 100)}%`}
                         {d.llm_verdict && ` · LLM ${d.llm_verdict}`}
                         {d.risk_notes && ` · ${d.risk_notes}`}
                       </div>

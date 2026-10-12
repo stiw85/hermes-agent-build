@@ -1,11 +1,12 @@
-import { IconArrowUp, IconBrain, IconBulb, IconMessageCircle, IconNotebook, IconTool, IconTrash } from '@tabler/icons-react'
+import { IconArrowUp, IconBrain, IconBulb, IconGauge, IconMessageCircle, IconNotebook, IconTool, IconTrash } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { EmptyGlass, GlassButton, GlassCard, PageHeader, Pill, Section, Tabs } from '../components/glass.tsx'
+import { Banner, EmptyGlass, GlassButton, GlassCard, PageHeader, Pill, Section, Stat, Tabs } from '../components/glass.tsx'
 import { HermesMark } from '../components/Shell.tsx'
-import { get, post, usePoll } from '../lib/api.ts'
+import { get, post, usePoll, type JevReport } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
+import { fmtNum, fmtPct, fmtSigned, fmtTime } from '../lib/format.ts'
 import { useStatus } from '../lib/status.ts'
 
 interface Msg {
@@ -139,8 +140,100 @@ function Chat({ enabled }: { enabled: boolean }) {
   )
 }
 
+function JevPanel() {
+  const r = usePoll<JevReport>('/api/jev?n=40', 20_000).data
+  if (!r) return <div className="shimmer h-40 rounded-lg" />
+  if (!r.enabled) {
+    return (
+      <EmptyGlass
+        icon={<IconGauge />}
+        title="JEV is off"
+        description={
+          <>
+            TypeSafe's Jev scores every new entry with a calibrated probability that it's worth taking. Set <code className="font-mono">jev.enabled: true</code> (mode{' '}
+            <code className="font-mono">shadow</code>) in config.yaml, put <code className="font-mono">TYPESAFE_API_KEY</code> in .env, check it with{' '}
+            <code className="font-mono">hermes-trader jev --test</code>, then restart the backend.
+          </>
+        }
+      />
+    )
+  }
+  const gate = r.mode === 'gate'
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Pill tone={gate ? 'warn' : 'info'} dot>
+          {gate ? 'Gate: can shrink or veto entries' : 'Shadow: watching only'}
+        </Pill>
+        <span className="text-[11.5px] text-fg-3">
+          veto &lt; {r.veto_below} · half size &lt; {r.reduce_below}
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-2">
+        <Stat label="Scored entries" value={String(r.scored ?? 0)} sub={r.errors ? `${r.taken ?? 0} taken · ${r.errors} errors` : `${r.taken ?? 0} taken`} />
+        <Stat label="Closed trades" value={String(r.resolved ?? 0)} sub={`${r.open ?? 0} still open`} />
+        <Stat label="If gating" value={fmtSigned(r.what_if_gate_pnl)} valueTone={(r.what_if_gate_pnl ?? 0) > 0 ? 'ok' : (r.what_if_gate_pnl ?? 0) < 0 ? 'danger' : 'muted'} sub={`JEV cost $${(r.cost_usd ?? 0).toFixed(4)}`} />
+      </div>
+      {r.recommendation && <Banner tone="info" title="Verdict so far">{r.recommendation}</Banner>}
+      <div>
+        <div className="mb-1.5 flex items-baseline justify-between text-[12px] text-fg-3">
+          <span>Calibration on closed trades</span>
+          <span className="tabular">
+            Brier {fmtNum(r.brier, 3)} vs base rate {fmtNum(r.brier_base_rate, 3)} (lower is better)
+          </span>
+        </div>
+        <table className="tabular w-full text-[12px]">
+          <thead>
+            <tr className="text-left text-fg-3">
+              <th className="pb-1.5 font-medium">JEV probability</th>
+              <th className="pb-1.5 text-right font-medium">Trades</th>
+              <th className="pb-1.5 text-right font-medium">Avg P</th>
+              <th className="pb-1.5 text-right font-medium">Won</th>
+              <th className="pb-1.5 text-right font-medium">P&L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(r.buckets ?? []).map(b => (
+              <tr key={b.bucket} className="border-t border-line">
+                <td className="py-1.5 text-fg-2">{b.bucket}</td>
+                <td className="py-1.5 text-right">{b.trades}</td>
+                <td className="py-1.5 text-right">{b.avg_p == null ? '—' : fmtPct(b.avg_p, 0)}</td>
+                <td className="py-1.5 text-right">{b.win_rate == null ? '—' : fmtPct(b.win_rate, 0)}</td>
+                <td className={cn('py-1.5 text-right', b.pnl > 0 ? 'text-ok' : b.pnl < 0 ? 'text-danger' : 'text-fg-3')}>{fmtSigned(b.pnl)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-1.5 text-[11px] text-fg-4">Well calibrated means the "Won" column tracks "Avg P". Trust it only after dozens of closed trades.</p>
+      </div>
+      <div>
+        <div className="mb-1.5 text-[12px] text-fg-3">Latest scores</div>
+        <ul className="flex flex-col">
+          {(r.recent ?? []).slice(0, 12).map((x, i) => (
+            <li key={i} className="flex items-center gap-2 border-t border-line py-1.5 text-[12px] first:border-t-0">
+              <span className="tabular w-[96px] shrink-0 text-fg-4">{fmtTime(x.ts)}</span>
+              <span className="w-[86px] shrink-0 truncate text-fg">{x.symbol}</span>
+              {x.error ? (
+                <Pill tone="warn" className="h-5 text-[10.5px]" title={x.error}>error</Pill>
+              ) : (
+                <Pill tone={x.verdict === 'veto' ? 'danger' : x.verdict === 'reduce' ? 'warn' : 'ok'} className="h-5 text-[10.5px]">
+                  P {fmtPct(x.p, 0)} · {x.verdict}
+                </Pill>
+              )}
+              <span className="truncate text-fg-3">{x.regime?.replace('_', ' ')}</span>
+              <span className={cn('tabular ml-auto shrink-0', x.outcome_pnl == null ? 'text-fg-4' : x.outcome_pnl > 0 ? 'text-ok' : 'text-danger')}>
+                {!x.taken ? (x.applied ? 'blocked' : 'not filled') : x.closed_ts ? fmtSigned(x.outcome_pnl) : 'open'}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
 function Memory() {
-  const [tab, setTab] = useState<'lessons' | 'playbooks'>('lessons')
+  const [tab, setTab] = useState<'lessons' | 'playbooks' | 'jev'>('lessons')
   const lessons = usePoll<string[]>('/api/lessons', 20_000)
   const books = usePoll<{ name: string; description: string }[]>('/api/playbooks', 60_000)
   const [open, setOpen] = useState<string | null>(null)
@@ -156,7 +249,8 @@ function Memory() {
       <Tabs
         tabs={[
           { id: 'lessons', label: 'Lessons', count: lessons.data?.length },
-          { id: 'playbooks', label: 'Playbooks', count: books.data?.length }
+          { id: 'playbooks', label: 'Playbooks', count: books.data?.length },
+          { id: 'jev', label: 'JEV' }
         ]}
         value={tab}
         onChange={t => {
@@ -165,6 +259,7 @@ function Memory() {
         }}
       />
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        {tab === 'jev' && <JevPanel />}
         {tab === 'lessons' &&
           (lessons.data?.length ? (
             <ul className="stagger flex flex-col gap-2">
@@ -212,7 +307,21 @@ export function BrainPage() {
   const { status } = useStatus()
   return (
     <div className="flex h-full flex-col">
-      <PageHeader icon={<IconBrain />} title="Brain" subtitle="What the bot has learned, its playbooks, and a line to the agent" actions={<Pill tone={status?.llm_enabled ? 'ok' : 'muted'} dot>{status?.llm_enabled ? 'LLM on' : 'LLM off'}</Pill>} />
+      <PageHeader
+        icon={<IconBrain />}
+        title="Brain"
+        subtitle="What the bot has learned, its playbooks, the JEV decision model, and a line to the agent"
+        actions={
+          <>
+            <Pill tone={status?.jev_mode === 'gate' ? 'warn' : status?.jev_mode === 'shadow' ? 'info' : 'muted'} dot>
+              JEV {status?.jev_mode ?? 'off'}
+            </Pill>
+            <Pill tone={status?.llm_enabled ? 'ok' : 'muted'} dot>
+              {status?.llm_enabled ? 'LLM on' : 'LLM off'}
+            </Pill>
+          </>
+        }
+      />
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 px-6 pb-6">
         <GlassCard className="min-h-0 p-4">
           <Section title="Memory" className="h-full">
