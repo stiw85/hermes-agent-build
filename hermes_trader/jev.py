@@ -60,7 +60,7 @@ class JevClient:
     def __init__(self, url: str, model: str, api_key: str | None, timeout: float = 20.0,
                  session: requests.Session | None = None) -> None:
         if not api_key:
-            raise JevError("JEV API key missing: set TYPESAFE_API_KEY in .env (or jev.api_key_env)")
+            raise JevError("JEV API key missing")
         self.url = url
         self.model = model
         self.key = api_key
@@ -69,8 +69,13 @@ class JevClient:
 
     @classmethod
     def from_config(cls, c: dict[str, Any]) -> JevClient:
-        return cls(c["url"], c["model"], os.environ.get(c.get("api_key_env", "TYPESAFE_API_KEY")),
-                   float(c.get("timeout", 20)))
+        from .config import missing_secret_hint
+
+        env = c.get("api_key_env", "TYPESAFE_API_KEY")
+        key = (os.environ.get(env) or "").strip()
+        if not key:
+            raise JevError(f"JEV is enabled but its API key is missing: {missing_secret_hint(env)}")
+        return cls(c["url"], c["model"], key, float(c.get("timeout", 20)))
 
     def decide(self, state: dict[str, Any] | str, questions: dict[str, Any]) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json",

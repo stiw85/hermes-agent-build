@@ -176,7 +176,7 @@ class Service:
             "symbols": list(cfg["symbols"]),
             "timeframe": cfg["timeframe"],
             "llm_enabled": bool(self.app.agent),
-            "jev_mode": cfg["jev"]["mode"] if cfg["jev"].get("enabled") else "off",
+            "jev_mode": ("error" if self.app.jev_error else cfg["jev"]["mode"]) if cfg["jev"].get("enabled") else "off",
             "allow_short": cfg["allow_short"],
             "day_pnl": round(eq - sod, 2),
             "day_pnl_pct": round(eq / sod - 1, 5) if sod else 0.0,
@@ -198,7 +198,7 @@ class Service:
             "positions": {}, "risk": e.state.to_dict(), "strategies": {s: e.book.entry(s).get("strategy") for s in e.symbols},
             "last_cycle": e.meta.get("last_cycle"), "version": __version__, "symbols": list(cfg["symbols"]),
             "timeframe": cfg["timeframe"], "llm_enabled": bool(self.app.agent), "allow_short": cfg["allow_short"],
-            "jev_mode": cfg["jev"]["mode"] if cfg["jev"].get("enabled") else "off",
+            "jev_mode": ("error" if self.app.jev_error else cfg["jev"]["mode"]) if cfg["jev"].get("enabled") else "off",
             "day_pnl": None, "day_pnl_pct": None, "drawdown_pct": None, "realized_pnl": None, "closed_trades": None,
             "bot": self.bot_state(), "busy": True,
         })
@@ -211,7 +211,7 @@ class Service:
         recent = [{k: r.get(k) for k in ("ts", "symbol", "side", "strategy", "p", "regime", "verdict", "applied",
                                          "taken", "outcome_pnl", "closed_ts", "error")}
                   for r in rows[: min(int(q.get("n", 50)), 500)]]
-        return {"enabled": bool(jc.get("enabled")), **report(rows, jc), "recent": recent}
+        return {"enabled": bool(jc.get("enabled")), "error": self.app.jev_error, **report(rows, jc), "recent": recent}
 
     def config(self) -> dict[str, Any]:
         raw = self.app.cfg.raw

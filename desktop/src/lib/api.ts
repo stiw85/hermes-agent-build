@@ -57,7 +57,7 @@ export interface Status {
   symbols: string[]
   timeframe: string
   llm_enabled: boolean
-  jev_mode: 'off' | 'shadow' | 'gate'
+  jev_mode: 'off' | 'shadow' | 'gate' | 'error'
   allow_short: boolean
   day_pnl: number | null
   day_pnl_pct: number | null
@@ -118,6 +118,8 @@ export interface JevBucket {
 
 export interface JevReport {
   enabled: boolean
+  /** set when JEV is enabled but could not start (e.g. missing key); the bot trades without it */
+  error?: string | null
   mode?: 'shadow' | 'gate'
   veto_below?: number
   reduce_below?: number

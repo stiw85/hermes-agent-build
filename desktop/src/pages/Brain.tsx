@@ -161,6 +161,11 @@ function JevPanel() {
   const gate = r.mode === 'gate'
   return (
     <div className="flex flex-col gap-3">
+      {r.error && (
+        <Banner tone="warn" title="JEV is enabled but not running: the bot is trading without it">
+          {r.error}
+        </Banner>
+      )}
       <div className="flex items-center gap-2">
         <Pill tone={gate ? 'warn' : 'info'} dot>
           {gate ? 'Gate: can shrink or veto entries' : 'Shadow: watching only'}
@@ -313,7 +318,7 @@ export function BrainPage() {
         subtitle="What the bot has learned, its playbooks, the JEV decision model, and a line to the agent"
         actions={
           <>
-            <Pill tone={status?.jev_mode === 'gate' ? 'warn' : status?.jev_mode === 'shadow' ? 'info' : 'muted'} dot>
+            <Pill tone={status?.jev_mode === 'error' ? 'danger' : status?.jev_mode === 'gate' ? 'warn' : status?.jev_mode === 'shadow' ? 'info' : 'muted'} dot>
               JEV {status?.jev_mode ?? 'off'}
             </Pill>
             <Pill tone={status?.llm_enabled ? 'ok' : 'muted'} dot>

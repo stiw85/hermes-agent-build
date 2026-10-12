@@ -157,8 +157,16 @@ def main(argv: list[str] | None = None) -> int:
         from .jev import JevClient, JevReviewer, report
 
         jc = cfg["jev"]
+        if app.jev_error and not a.test:
+            print(f"⚠️  {app.jev_error}", file=sys.stderr)
         if a.test:
-            rev = JevReviewer(JevClient.from_config(jc), {**jc, "mode": jc.get("mode", "shadow")})
+            from .jev import JevError
+
+            try:
+                rev = JevReviewer(JevClient.from_config(jc), {**jc, "mode": jc.get("mode", "shadow")})
+            except JevError as err:
+                print(f"❌ {err}", file=sys.stderr)
+                return 2
             sym = e.symbols[0]
             df = e.broker.fetch_ohlcv(sym, cfg["timeframe"], 300)
             from .jev import build_state
@@ -167,7 +175,11 @@ def main(argv: list[str] | None = None) -> int:
 
             sig = e.book.strategy_for(sym).signal(sym, df)
             dec = RiskDecision(Order(sym, Side.BUY, 1.0), True, [], 1000.0, 0.0)
-            v = rev.score(build_state(sig, dec, e.broker.account(e.symbols), df, cfg["timeframe"], {}, []), "buy")
+            try:
+                v = rev.score(build_state(sig, dec, e.broker.account(e.symbols), df, cfg["timeframe"], {}, []), "buy")
+            except JevError as err:
+                print(f"❌ JEV call to {jc['url']} failed: {err}", file=sys.stderr)
+                return 2
             _p({"ok": True, "endpoint": jc["url"], "model": v.model, "symbol": sym, "p_worth_taking_long": v.p,
                 "regime": v.regime, "gate_would": v.verdict, "cost_usd": v.cost})
         else:

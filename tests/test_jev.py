@@ -73,7 +73,7 @@ def test_client_retries_with_text_state_and_reports_errors():
     assert isinstance(s.calls[-1]["json"]["state"], str)
     with pytest.raises(JevError, match="401"):
         JevClient(JC["url"], "m", "k", session=FakeSession(status=401)).decide({}, {})
-    with pytest.raises(JevError, match="TYPESAFE_API_KEY"):
+    with pytest.raises(JevError, match="API key missing"):
         JevClient(JC["url"], "m", None)
 
 
@@ -201,3 +201,46 @@ def test_old_journal_gets_new_columns(tmp_path):
     j = Journal(p)
     j.decision(symbol="X", action="hold", jev_p=0.5, jev_note="n")
     assert j.rows("SELECT jev_p FROM decisions")[0]["jev_p"] == 0.5
+
+
+def test_dotenv_parsing_handles_common_shapes():
+    from hermes_trader.config import parse_dotenv
+
+    env = parse_dotenv(
+        "﻿# comment\n"
+        "TYPESAFE_API_KEY=\n"  # empty placeholder from env.example
+        "export TYPESAFE_API_KEY=ts_live_abc\n"
+        "LLM_API_KEY = 'quoted value'\n"
+        'OTHER="dq" \n'
+        "WITH_COMMENT=val # note\n"
+        "EMPTY_ONLY=\n"
+    )
+    assert env["TYPESAFE_API_KEY"] == "ts_live_abc"
+    assert env["LLM_API_KEY"] == "quoted value" and env["OTHER"] == "dq"
+    assert env["WITH_COMMENT"] == "val" and env["EMPTY_ONLY"] == ""
+
+
+def test_dotenv_next_to_config_and_empty_shell_var(tmp_path, monkeypatch):
+    import hermes_trader.config as C
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "config.yaml").write_text("home: ./data\n")
+    (proj / ".env").write_text("export HT_TEST_KEY=from-file\n")
+    monkeypatch.setenv("HT_TEST_KEY", "")  # an empty shell export must not hide the file's value
+    monkeypatch.chdir(tmp_path)  # run from a different folder
+    monkeypatch.setattr(C, "DOTENV_FILES", [])
+    C.load_config(proj / "config.yaml")
+    import os
+
+    assert os.environ["HT_TEST_KEY"] == "from-file"
+
+
+def test_missing_key_disables_jev_but_bot_still_builds(tmp_path, monkeypatch):
+    from hermes_trader.runtime import build
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    cfg = load_config(overrides={"home": str(tmp_path), "jev": {**JC}})
+    app = build(cfg)
+    assert app.engine.jev is None and "TYPESAFE_API_KEY" in app.jev_error
+    assert any("JEV disabled" in e["message"] for e in app.engine.journal.recent_events(kind="error"))

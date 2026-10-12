@@ -48,6 +48,7 @@ class App:
     toolkit: Toolkit
     agent: Agent | None
     notify: Callable[[str], None]
+    jev_error: str | None = None
 
     def improve_all(self, promote: bool = True) -> list[dict[str, Any]]:
         out = []
@@ -125,11 +126,17 @@ def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
     lessons = Lessons(cfg.home / "LESSONS.md")
     playbooks = Playbooks(cfg.home / "playbooks", [BUNDLED_PLAYBOOKS])
     toolkit = Toolkit(engine, improver, lessons, playbooks, confirm=confirm)
+    jev_error = None
     if cfg["jev"].get("enabled"):
-        from .jev import JevClient, JevReviewer
+        from .jev import JevClient, JevError, JevReviewer
 
-        engine.jev = JevReviewer(JevClient.from_config(cfg["jev"]), cfg["jev"], cfg["timeframe"], engine.journal,
-                                 engine.book, lessons)
+        try:
+            engine.jev = JevReviewer(JevClient.from_config(cfg["jev"]), cfg["jev"], cfg["timeframe"], engine.journal,
+                                     engine.book, lessons)
+        except (JevError, ValueError) as e:  # trade without JEV rather than not at all
+            jev_error = str(e)
+            log.warning("JEV disabled: %s", e)
+            engine.journal.event("error", f"JEV disabled: {e}")
     agent = None
     lc = cfg["llm"]
     if lc.get("enabled"):
@@ -137,4 +144,4 @@ def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
         agent = Agent(llm, toolkit, lc.get("max_tool_iterations", 12), on_event)
         if lc.get("trade_review", True):
             engine.reviewer = make_reviewer(llm, toolkit)
-    return App(cfg, engine, improver, toolkit, agent, notify)
+    return App(cfg, engine, improver, toolkit, agent, notify, jev_error)

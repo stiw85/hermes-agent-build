@@ -107,17 +107,48 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
-def load_dotenv(path: str | Path = ".env") -> None:
-    """Tiny .env loader (KEY=VALUE lines). Existing env vars win."""
-    p = Path(path)
-    if not p.is_file():
-        return
-    for line in p.read_text().splitlines():
-        line = line.strip()
+DOTENV_FILES: list[str] = []  # which .env files were read (for error messages; never their contents)
+
+
+def parse_dotenv(text: str) -> dict[str, str]:
+    """KEY=VALUE lines; tolerates `export KEY=...`, spaces around `=`, quotes and trailing comments.
+    Later non-empty values win over earlier ones (an empty placeholder never hides a real value)."""
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("\ufeff")
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
         k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        k, v = k.strip(), v.strip()
+        if v[:1] in ("'", '"') and v.count(v[0]) >= 2:
+            v = v[1 : v.index(v[0], 1)]
+        elif " #" in v:
+            v = v.split(" #", 1)[0].strip()
+        if not k:
+            continue
+        if v or k not in out:
+            out[k] = v
+    return out
+
+
+def load_dotenv(path: str | Path = ".env") -> None:
+    """Load a .env file. A real (non-empty) value in the shell environment wins; an empty one doesn't."""
+    p = Path(path).expanduser().resolve()
+    if not p.is_file() or str(p) in DOTENV_FILES:
+        return
+    DOTENV_FILES.append(str(p))
+    for k, v in parse_dotenv(p.read_text(errors="replace")).items():
+        if v and not os.environ.get(k):
+            os.environ[k] = v
+        else:
+            os.environ.setdefault(k, v)
+
+
+def missing_secret_hint(name: str) -> str:
+    where = ", ".join(DOTENV_FILES) or "no .env file found (looked in this folder and next to config.yaml)"
+    return f"{name} is not set or empty. Read: {where}. Add a line like `{name}=your-key` (no quotes needed)."
 
 
 @dataclass
@@ -156,13 +187,14 @@ class Config:
 
 
 def load_config(path: str | Path | None = None, overrides: dict | None = None) -> Config:
-    load_dotenv()
+    load_dotenv()  # ./.env
     raw = copy.deepcopy(DEFAULTS)
     cfg_path = None
     candidates = [path] if path else [os.environ.get("HERMES_TRADER_CONFIG"), "config.yaml"]
     for c in candidates:
         if c and Path(c).is_file():
             cfg_path = Path(c).resolve()
+            load_dotenv(cfg_path.parent / ".env")  # .env next to config.yaml, wherever you run from
             raw = _deep_merge(raw, yaml.safe_load(cfg_path.read_text()) or {})
             break
     else:
