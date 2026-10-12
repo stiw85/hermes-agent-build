@@ -87,6 +87,39 @@ fi
 # $HERMES_HOME/plugins, `hermes plugins enable herald-os-bridge` and `hermes tools enable herald_os`.
 run env HERMES_HOME="$HERMES_HOME" bash "$HERALD_DIR/scripts/bootstrap.sh"
 
+# Two Linux steps Herald's bootstrap (written for macOS development) leaves to its VM build
+# script (linux/dev/build.sh): node-pty ships no Linux prebuilds, and Electron's setuid sandbox
+# helper must be root-owned 4755 where unprivileged user namespaces are restricted (Ubuntu 24.04).
+if [ "$(uname -s)" = "Linux" ]; then
+    step "Linux extras: node-pty build and the Electron sandbox helper"
+    arch="$(uname -m | sed 's/aarch64/arm64/;s/x86_64/x64/')"
+    pty_dir="$HERALD_DIR/node_modules/node-pty"
+    if [ "$DRY_RUN" = 1 ] || { [ ! -f "$pty_dir/build/Release/pty.node" ] && [ ! -d "$pty_dir/prebuilds/linux-$arch" ]; }; then
+        if [ "$DRY_RUN" != 1 ] && ! { command -v make >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; }; then
+            need "compilers are required to build Herald's terminal module (node-pty). On Ubuntu: sudo apt install -y build-essential python3 — then re-run this script"
+        fi
+        note "compiling node-pty against this Node"
+        run bash -c "cd '$pty_dir' && npx --yes node-gyp rebuild >/dev/null"
+    else
+        note "node-pty already built"
+    fi
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + fix chrome-sandbox ownership (sudo chown root:root + chmod 4755) when needed"
+    else
+        electron_bin="$(cd "$HERALD_DIR/apps/desktop" && node -p "require('electron')" 2>/dev/null || true)"
+        sandbox="$(dirname "${electron_bin:-/nonexistent}")/chrome-sandbox"
+        if [ -f "$sandbox" ] && [ "$(stat -c '%u %a' "$sandbox")" != "0 4755" ]; then
+            if command -v sudo >/dev/null 2>&1 && sudo chown root:root "$sandbox" && sudo chmod 4755 "$sandbox"; then
+                note "chrome-sandbox fixed: $sandbox"
+            else
+                warn "could not fix $sandbox; if Herald exits with a sandbox error, run: sudo chown root:root '$sandbox' && sudo chmod 4755 '$sandbox'"
+            fi
+        else
+            note "chrome-sandbox ok"
+        fi
+    fi
+fi
+
 step "Installing the herald launcher"
 launcher="$BIN_DIR/herald"
 if [ "$DRY_RUN" = 1 ]; then
