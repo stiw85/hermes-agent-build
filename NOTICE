@@ -4,3 +4,8 @@ Copyright (c) 2025 Nous Research, released under the MIT License.
 This branch is a ground-up trading-only rebuild. It keeps Hermes's design ideas
 (model-agnostic tool-calling loop, curated MEMORY -> LESSONS.md, SKILL.md playbooks,
 background self-review, SOUL.md persona, scheduled jobs) and drops everything else.
+
+The desktop app (desktop/) adapts design tokens, glass UI primitives and the wallpaper idea from
+Herald OS (https://github.com/iamlukethedev/Herald-OS), Copyright (c) Luke The Dev, MIT License.
+Herald OS is an independent project, not affiliated with Nous Research. Hermes Trader is not
+affiliated with either.

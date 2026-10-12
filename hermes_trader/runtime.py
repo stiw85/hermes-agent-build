@@ -82,25 +82,36 @@ class App:
             log.warning("reflection failed: %s", e)
             return None
 
-    def run_forever(self, once: bool = False) -> None:
+    def cycle_seconds(self) -> float:
         tf_s = timeframe_seconds(self.cfg["timeframe"])
-        every = (self.cfg["schedule"].get("cycle_minutes") or tf_s / 60) * 60
+        return float((self.cfg["schedule"].get("cycle_minutes") or tf_s / 60) * 60)
+
+    def next_wake(self, now: float | None = None) -> float:
+        """Epoch seconds of the next cycle: 5s after the next bar close, so the venue has the candle."""
+        every = self.cycle_seconds()
+        now = time.time() if now is None else now
+        return (now // every + 1) * every + 5
+
+    def tick(self) -> dict[str, Any]:
+        """One scheduler step: re-optimise if due, trade one cycle, reflect if due."""
         improve_every = self.cfg["schedule"]["improve_every_hours"] * 3600
+        last_imp = self.engine.meta.get("last_improve")
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(last_imp)).total_seconds() if last_imp else 1e12
+        if age >= improve_every:
+            self.improve_all()
+        rep = self.engine.cycle()
+        log.info("cycle: %s", {s: v.get("action") for s, v in rep["symbols"].items()})
+        self.maybe_reflect()
+        return rep
+
+    def run_forever(self, once: bool = False) -> None:
         self.notify(f"Hermes Trader started: {self.cfg['mode']} via {self.engine.broker.name}, "
                     f"{', '.join(self.engine.symbols)} @ {self.cfg['timeframe']}")
         while True:
-            last_imp = self.engine.meta.get("last_improve")
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(last_imp)).total_seconds() if last_imp else 1e12
-            if age >= improve_every:
-                self.improve_all()
-            rep = self.engine.cycle()
-            log.info("cycle: %s", {s: v.get("action") for s, v in rep["symbols"].items()})
-            self.maybe_reflect()
+            self.tick()
             if once:
                 return
-            now = time.time()
-            nxt = (now // every + 1) * every + 5  # 5s after bar close so the venue has the candle
-            time.sleep(max(1.0, nxt - now))
+            time.sleep(max(1.0, self.next_wake() - time.time()))
 
 
 def build(cfg: Config, confirm: Callable[[str], bool] | None = None,

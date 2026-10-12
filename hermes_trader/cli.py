@@ -66,6 +66,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("reflect", help="run an LLM self-review now")
     ch = sub.add_parser("chat", help="talk to the trading agent")
     ch.add_argument("message", nargs="*")
+    sv = sub.add_parser("serve", help="local API for the desktop app (127.0.0.1 only)")
+    sv.add_argument("--port", type=int, default=8765, help="0 = pick a free port")
+    sv.add_argument("--run", action="store_true", help="start the trading loop immediately")
     d = sub.add_parser("download", help="save history to CSV (for data_source: csv)")
     d.add_argument("symbol")
     d.add_argument("--bars", type=int, default=5000)
@@ -148,6 +151,10 @@ def main(argv: list[str] | None = None) -> int:
                     break
                 if msg:
                     print("\nhermes>", app.agent.run(msg, keep_history=True))
+    elif a.cmd == "serve":
+        from .server import serve
+
+        serve(app, a.port, run_bot=a.run)
     elif a.cmd == "download":
         from .data import save_csv
 

@@ -47,6 +47,7 @@ class ImproveReport:
     promoted: bool
     reason: str
     leaderboard: list[Candidate] = field(default_factory=list)
+    passes: bool = False  # the challenger cleared the holdout gate (promoted or not)
 
     def to_dict(self) -> dict[str, Any]:
         def c(x: Candidate | None) -> dict[str, Any] | None:
@@ -60,7 +61,7 @@ class ImproveReport:
 
         return {"symbol": self.symbol, "incumbent": self.incumbent,
                 "incumbent_score": round(self.incumbent_score, 3) if math.isfinite(self.incumbent_score) else None,
-                "best": c(self.best), "promoted": self.promoted, "reason": self.reason,
+                "best": c(self.best), "promoted": self.promoted, "passes": self.passes, "reason": self.reason,
                 "leaderboard": [c(x) for x in self.leaderboard[:5]]}
 
 
@@ -141,4 +142,4 @@ class Improver:
             book.promote(symbol, best.strategy, best.params,
                          {"holdout": best.test, "score": round(best.score, 3), "bars": len(df)}, source="walk-forward")
         board[0] = best
-        return ImproveReport(symbol, inc, inc_score, best, ok and promote, why, board)
+        return ImproveReport(symbol, inc, inc_score, best, ok and promote, why, board, passes=ok)

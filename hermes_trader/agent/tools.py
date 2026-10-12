@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 from datetime import datetime
 from typing import Any, Callable
 
@@ -59,6 +60,7 @@ class Toolkit:
         self.lessons = lessons
         self.playbooks = playbooks
         self.confirm = confirm
+        self.lock = threading.RLock()  # the API server shares one lock across engine users
         self._spec: dict[str, tuple[str, dict[str, Any], Callable[..., Any]]] = {
             "get_portfolio": ("Account equity, cash, positions, risk state, active strategy per symbol.",
                               _schema({}), self.get_portfolio),
@@ -119,7 +121,8 @@ class Toolkit:
         if name not in self._spec:
             return json.dumps({"error": f"unknown tool {name}"})
         try:
-            out = self._spec[name][2](**(args or {}))
+            with self.lock:
+                out = self._spec[name][2](**(args or {}))
         except TypeError as e:
             out = {"error": f"bad arguments: {e}"}
         except Exception as e:  # tools never crash the loop

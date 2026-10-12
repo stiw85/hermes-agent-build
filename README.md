@@ -81,6 +81,18 @@ hermes-trader lessons               # what it has learned
 ```
 In `chat`, the agent can also place manual orders. Every one needs you to type `yes`, and the risk caps still apply.
 
+## Desktop app
+
+<p align="center"><img src="desktop/docs/overview.png" alt="Hermes Trader desktop: overview" width="100%"></p>
+
+A Linux desktop app in the Herald OS "deep-blue glass" style. It covers the overview, candles with the bot's fills, the strategy book (with walk-forward search and roll-back), a backtest lab, the journal, lessons and playbooks, and chat. It talks to the bot through a local, token-protected API (`hermes-trader serve`).
+
+```bash
+cd desktop && npm install && npm start
+```
+
+See [desktop/README.md](desktop/README.md) for connection modes (the app starts the bot, or attaches to one you run 24/7) and the safety model.
+
 ## Commands
 
 | Command | What it does |
@@ -93,6 +105,7 @@ In `chat`, the agent can also place manual orders. Every one needs you to type `
 | `flatten` / `halt` / `resume` | Emergency controls |
 | `rollback SYMBOL` | Revert to the previous strategy version |
 | `chat` / `reflect` | Talk to the agent / run a self-review |
+| `serve [--port N] [--run]` | Local API for the desktop app (127.0.0.1 only, token auth); `--run` starts trading immediately |
 | `download SYMBOL --bars N` | Save history to CSV (`data_source: csv`) |
 
 ## Strategies
@@ -110,7 +123,9 @@ hermes_trader/
   agent/     llm.py  loop.py  tools.py  memory.py  prompts.py
   playbooks/ bundled procedural playbooks (SKILL.md)
   templates/ config.example.yaml, env.example (copied by `init`)
-tests/       60 tests: no-look-ahead, holdout isolation, risk limits, kill switch, stop cooldown, broker adapters, LLM veto/clamp, gated promotion
+  server.py  local API for the desktop app
+desktop/     Electron app (Herald OS stack and design)
+tests/       75 tests: no-look-ahead, holdout isolation, risk limits, kill switch, stop cooldown, broker adapters, LLM veto/clamp, gated promotion, API auth/locking/shutdown
 ```
 
 Runtime state lives in `data/` (`journal.sqlite`, `strategy_book.yaml`, `LESSONS.md`, `playbooks/`, broker state). Back it up, because this is what the bot has learned.

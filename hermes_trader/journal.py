@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -36,15 +37,17 @@ class Journal:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
+        self.lock = threading.RLock()  # one connection shared by the bot thread and API threads
         self.db.executescript(SCHEMA)
 
     def _ins(self, table: str, row: dict[str, Any]) -> int:
         row = {"ts": utcnow().isoformat(), **row}
         cols = ",".join(row)
         q = ",".join("?" for _ in row)
-        cur = self.db.execute(f"INSERT INTO {table} ({cols}) VALUES ({q})", list(row.values()))
-        self.db.commit()
-        return int(cur.lastrowid or 0)
+        with self.lock:
+            cur = self.db.execute(f"INSERT INTO {table} ({cols}) VALUES ({q})", list(row.values()))
+            self.db.commit()
+            return int(cur.lastrowid or 0)
 
     def decision(self, **row: Any) -> int:
         if isinstance(row.get("params"), dict):
@@ -64,7 +67,8 @@ class Journal:
 
     # ---- queries ------------------------------------------------------
     def rows(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.execute(sql, args).fetchall()]
+        with self.lock:
+            return [dict(r) for r in self.db.execute(sql, args).fetchall()]
 
     def recent_fills(self, n: int = 50) -> list[dict[str, Any]]:
         return self.rows("SELECT * FROM fills WHERE status='filled' ORDER BY id DESC LIMIT ?", (n,))
@@ -78,7 +82,7 @@ class Journal:
         return self.rows("SELECT * FROM events ORDER BY id DESC LIMIT ?", (n,))
 
     def closed_trade_count(self) -> int:
-        return int(self.db.execute("SELECT COUNT(*) FROM fills WHERE realized_pnl IS NOT NULL").fetchone()[0])
+        return int(self.rows("SELECT COUNT(*) AS n FROM fills WHERE realized_pnl IS NOT NULL")[0]["n"])
 
     def stats(self) -> dict[str, Any]:
         by = self.rows(
@@ -96,7 +100,7 @@ class Journal:
             peak = max(peak, v)
             mdd = max(mdd, (peak - v) / peak if peak else 0.0)
         return {
-            "fills": int(self.db.execute("SELECT COUNT(*) FROM fills WHERE status='filled'").fetchone()[0]),
+            "fills": int(self.rows("SELECT COUNT(*) AS n FROM fills WHERE status='filled'")[0]["n"]),
             "closed_trades": self.closed_trade_count(),
             "realized_pnl": round(sum(r["pnl"] or 0 for r in by), 2),
             "by_strategy_symbol": by,

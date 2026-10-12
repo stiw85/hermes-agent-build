@@ -52,8 +52,12 @@ class Agent:
                     args = json.loads(fn.get("arguments") or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                self.on_event("tool", {"name": fn.get("name"), "args": args})
-                out = self.tk.call(fn.get("name", ""), args)
+                name = fn.get("name", "")
+                self.on_event("tool", {"name": name, "args": args})
+                if tools is not None and name not in tools:
+                    out = json.dumps({"error": f"tool {name} is not available here"})
+                else:
+                    out = self.tk.call(name, args)
                 self.messages.append({"role": "tool", "tool_call_id": c.get("id", ""), "content": out})
         # out of budget: ask for a final answer without tools
         self.messages.append({"role": "user", "content": "Tool budget exhausted. Summarise now."})
