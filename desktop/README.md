@@ -24,6 +24,14 @@ npm install            # needs Node 22.12+
 npm start              # builds, then opens the app
 ```
 
+**Ubuntu 23.10+ / 24.04:** if `npm start` aborts with *"The SUID sandbox helper binary was found, but is not configured correctly"*, run this once:
+
+```bash
+npm run setup-sandbox   # installs a one-binary AppArmor profile (asks for sudo); keeps Chromium's sandbox on
+```
+
+Don't use `--no-sandbox`. The sandbox isolates the window that can start and stop trading.
+
 On first launch the app looks for `config.yaml` in `~/hermes-trader`. If yours is somewhere else, change the folder in **Settings**.
 
 To get an installable build, run `npm run dist:linux`. It writes an AppImage and a `.tar.gz` to `release/`.
