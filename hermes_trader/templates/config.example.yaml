@@ -80,6 +80,23 @@ jev:
     horizon_bars: 6      # each answer is scored against what price did this many bars later
     min_resolved: 50
 
+# ---- entry filters (price action + volatility maths; deterministic, free) ------------------
+# Checked on every new entry. shadow = only record what they would do; act = skip failing entries.
+# `hermes-trader filters` shows whether entries they'd block really did worse; add
+# `--backtest BTC/USDT --strategy rsi_reversion` to replay history through them right away.
+filters:
+  enabled: true
+  mode: shadow
+  horizon_bars: 12
+  levels:            # room to the next daily/weekly key level (swings, prev day/week high-low, round numbers)
+    enabled: true
+    min_rr: 1.5      # distance to that level / ATR-stop distance
+    # mode: act      # per-filter override
+  stretch:           # don't chase: last 24-bar move in sigmas (Black-Scholes volatility maths)
+    enabled: true
+    bars: 24
+    max_z: 2.0
+
 # ---- self-improvement -------------------------------------------------------------
 improve:
   lookback_bars: 2000

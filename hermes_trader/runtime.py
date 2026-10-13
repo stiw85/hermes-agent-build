@@ -120,6 +120,10 @@ def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
     broker = make_broker(cfg)
     notify = telegram_notifier(cfg)
     engine = Engine(cfg, broker, notify=notify)
+    if cfg["filters"].get("enabled", True):
+        from .filters import EntryFilters
+
+        engine.filters = EntryFilters(cfg["filters"], cfg["risk"], broker, cfg["timeframe"])
     b = cfg["broker"]
     improver = Improver(cfg["improve"], fee_bps=b["fee_bps"], slippage_bps=b["slippage_bps"],
                         timeframe=cfg["timeframe"], allow_short=cfg["allow_short"])

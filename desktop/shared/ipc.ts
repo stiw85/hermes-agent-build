@@ -49,7 +49,7 @@ export interface TraderBridge {
 export const API_GET = [
   '/api/health', '/api/status', '/api/equity', '/api/fills', '/api/decisions', '/api/events', '/api/stats',
   '/api/book', '/api/strategies', '/api/candles', '/api/lessons', '/api/playbooks', '/api/playbook', '/api/config',
-  '/api/jev'
+  '/api/jev', '/api/filters'
 ] as const
 export const API_POST = [
   '/api/bot/start', '/api/bot/stop', '/api/cycle', '/api/halt', '/api/resume', '/api/flatten', '/api/rollback',

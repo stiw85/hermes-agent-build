@@ -64,7 +64,7 @@ class Toolkit:
         self._spec: dict[str, tuple[str, dict[str, Any], Callable[..., Any]]] = {
             "get_portfolio": ("Account equity, cash, positions, risk state, active strategy per symbol.",
                               _schema({}), self.get_portfolio),
-            "market_snapshot": ("Price, trend, volatility, RSI, ATR for a symbol (closed bars).",
+            "market_snapshot": ("Price, trend, volatility, RSI, ATR, key support/resistance levels and expected-move bands for a symbol (closed bars).",
                                 _schema({"symbol": {"type": "string"}, "bars": {"type": "integer"}}, ["symbol"]),
                                 self.market_snapshot),
             "list_strategies": ("Available strategies, default params and search grids.", _schema({}),
@@ -97,6 +97,13 @@ class Toolkit:
             "jev_report": ("How well the JEV decision model's entry probabilities matched real outcomes "
                            "(calibration buckets, Brier score, what gating would have changed).",
                            _schema({}), self.jev_report),
+            "filter_report": ("Entry filters (key-level room, stretch in sigmas): how entries they would block "
+                              "actually did vs the rest, live from the journal.", _schema({}), self.filter_report),
+            "filter_backtest": ("Replay a strategy's past entries on a symbol through the entry filters: blocked vs "
+                                "passed trade returns. Defaults to the symbol's current strategy.",
+                                _schema({"symbol": {"type": "string"}, "strategy": {"type": "string"},
+                                         "params": {"type": "object"}, "bars": {"type": "integer"}}, ["symbol"]),
+                                self.filter_backtest),
             "memory": ("Curated lessons. action=add(text) | replace(old,text) | remove(old) | view.",
                        _schema({"action": {"type": "string", "enum": ["add", "replace", "remove", "view"]},
                                 "text": {"type": "string"}, "old": {"type": "string"}}, ["action"]),
@@ -143,7 +150,34 @@ class Toolkit:
 
     def market_snapshot(self, symbol: str, bars: int = 300) -> dict[str, Any]:
         df = self._df(symbol, max(60, min(int(bars), 2000)))
-        return market_snapshot(df, self.cfg["timeframe"], asset_class_of(symbol).value)
+        out = market_snapshot(df, self.cfg["timeframe"], asset_class_of(symbol).value)
+        try:
+            from datetime import timezone
+
+            from ..context import price_context
+
+            f = self.e.filters
+            daily = f.daily(symbol, df, datetime.now(timezone.utc)) if f else None
+            pivot = int(f.sub("levels").get("pivot", 3)) if f else 3
+            out["context"] = price_context(df, daily, horizon_bars=24, pivot=pivot)
+        except Exception as e:  # noqa: BLE001 - context is extra; the snapshot still stands
+            out["context"] = {"error": str(e)[:200]}
+        return out
+
+    def filter_report(self) -> dict:
+        from ..filters import filter_report
+
+        return filter_report(self.e.journal.filter_rows(), self.cfg["filters"])
+
+    def filter_backtest(self, symbol: str, strategy: str | None = None, params: dict | None = None,
+                        bars: int = 3000) -> dict:
+        from ..filters import EntryFilters, evaluate_history
+
+        df = self._df(symbol, min(int(bars), 10_000))
+        strat = make(strategy, params or {}) if strategy else self.e.book.strategy_for(symbol)
+        fc = self.cfg["filters"]
+        f = self.e.filters or EntryFilters(fc, self.cfg["risk"], None, self.cfg["timeframe"])
+        return {"strategy": repr(strat), **evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)))}
 
     def run_backtest(self, symbol: str, strategy: str, params: dict | None = None, bars: int = 1500) -> dict:
         df = self._df(symbol, min(int(bars), 10_000))

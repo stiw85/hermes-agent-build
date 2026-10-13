@@ -103,6 +103,11 @@ def main(argv: list[str] | None = None) -> int:
     ch.add_argument("message", nargs="*")
     jv = sub.add_parser("jev", help="JEV decision-model report (shadow/gate calibration)")
     jv.add_argument("--test", action="store_true", help="make one live JEV call to check the key and endpoint")
+    fl = sub.add_parser("filters", help="entry-filter report: live shadow stats, or --backtest SYMBOL to replay history")
+    fl.add_argument("--backtest", metavar="SYMBOL", help="replay a strategy's past entries through the filters")
+    fl.add_argument("--strategy", help="default: the symbol's current strategy")
+    fl.add_argument("--params", default="{}")
+    fl.add_argument("--bars", type=int, default=3000)
     sub.add_parser("llm", help="make one live LLM call to check the key, endpoint, model and tool calling")
     sv = sub.add_parser("serve", help="local API for the desktop app (127.0.0.1 only)")
     sv.add_argument("--port", type=int, default=8765, help="0 = pick a free port")
@@ -229,6 +234,21 @@ def main(argv: list[str] | None = None) -> int:
 
             _p({"enabled": bool(jc.get("enabled")), "entry_gate": report(e.journal.jev_rows(), jc),
                 "per_bar_checks": check_report(e.journal.jev_check_rows(), jc)})
+    elif a.cmd == "filters":
+        from .filters import EntryFilters, evaluate_history, filter_report
+
+        fc = cfg["filters"]
+        if a.backtest:
+            from .strategies import make
+
+            sym = a.backtest
+            df = e.broker.fetch_ohlcv(sym, cfg["timeframe"], a.bars)
+            strat = make(a.strategy, json.loads(a.params)) if a.strategy else e.book.strategy_for(sym)
+            f = e.filters or EntryFilters(fc, cfg["risk"], None, cfg["timeframe"])
+            res = evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)))
+            _p({"symbol": sym, "strategy": repr(strat), "bars": len(df), **res})
+        else:
+            _p(filter_report(e.journal.filter_rows(), fc))
     elif a.cmd == "serve":
         from .server import serve
 

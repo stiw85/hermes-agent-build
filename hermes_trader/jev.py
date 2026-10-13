@@ -144,6 +144,25 @@ def market_facts(symbol: str, df: pd.DataFrame, timeframe: str) -> dict[str, Any
         "atr_pct_of_price": _pct(snap["atr_pct"]),
         "position_in_100_bar_range": _label(pos_in_range, [(0.2, "near the low"), (0.4, "lower half"),
                                                            (0.6, "middle"), (0.8, "upper half")], "near the high"),
+        **_level_facts(df),
+    }
+
+
+def _level_facts(df: pd.DataFrame) -> dict[str, Any]:
+    """Key levels and volatility maths (price action + BSM), as plain facts."""
+    from .context import price_context
+
+    try:
+        cx = price_context(df, None, horizon_bars=24)
+    except Exception:  # noqa: BLE001 - facts are best effort
+        return {}
+    em = cx.get("expected_move") or {}
+    return {
+        "nearest_support": cx.get("nearest_support"), "nearest_support_distance_pct": cx.get("support_dist_pct"),
+        "nearest_resistance": cx.get("nearest_resistance"),
+        "nearest_resistance_distance_pct": cx.get("resistance_dist_pct"),
+        "typical_move_next_24_bars_pct": em.get("sigma_pct"),
+        "last_24_bar_move_in_sigmas": cx.get("stretch_z_24"),
     }
 
 

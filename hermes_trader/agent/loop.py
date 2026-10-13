@@ -89,7 +89,7 @@ def make_reviewer(llm: LLM, toolkit: Toolkit) -> Callable[[Signal, RiskDecision,
     return review
 
 
-REFLECT_TOOLS = ["journal_stats", "jev_report", "recent_trades", "recent_decisions", "strategy_book", "market_snapshot",
+REFLECT_TOOLS = ["journal_stats", "jev_report", "filter_report", "filter_backtest", "recent_trades", "recent_decisions", "strategy_book", "market_snapshot",
                  "run_backtest", "optimize", "promote_strategy", "rollback_strategy", "memory", "playbook",
                  "list_strategies", "get_portfolio"]
 

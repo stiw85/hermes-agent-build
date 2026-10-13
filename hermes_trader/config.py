@@ -83,6 +83,14 @@ DEFAULTS: dict[str, Any] = {
             "min_resolved": 50,
         },
     },
+    "filters": {  # deterministic entry checks; shadow = record only, act = skip failing entries
+        "enabled": True,
+        "mode": "shadow",
+        "horizon_bars": 12,  # score each check by the move over this many bars
+        "min_resolved": 30,  # scored would-be blocks needed before the report recommends act
+        "levels": {"enabled": True, "min_rr": 1.5, "pivot": 3, "round_numbers": True, "lookback": 180},
+        "stretch": {"enabled": True, "bars": 24, "max_z": 2.0, "vol_bars": 100},
+    },
     "improve": {
         "lookback_bars": 2000,
         "train_fraction": 0.7,

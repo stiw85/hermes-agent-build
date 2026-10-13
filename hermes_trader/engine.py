@@ -64,7 +64,8 @@ def closed_bars(df: pd.DataFrame, timeframe: str, now: datetime) -> pd.DataFrame
 class Engine:
     def __init__(self, cfg: Config, broker: Broker, journal: Journal | None = None,
                  book: StrategyBook | None = None, reviewer: Reviewer | None = None,
-                 notify: Notifier | None = None, jev: EntryScorer | None = None, jev_checks: Any = None) -> None:
+                 notify: Notifier | None = None, jev: EntryScorer | None = None, jev_checks: Any = None,
+                 filters: Any = None) -> None:
         self.cfg = cfg
         self.broker = broker
         self.journal = journal or Journal(cfg.home / "journal.sqlite")
@@ -73,6 +74,7 @@ class Engine:
         self.reviewer = reviewer
         self.jev = jev
         self.jev_checks = jev_checks  # jev_checks.JevChecker: regime / fit / exit every bar
+        self.filters = filters  # filters.EntryFilters: deterministic entry checks (shadow / act)
         self.notify = notify or (lambda msg: None)
         self.state_path: Path = cfg.home / "engine_state.json"
         raw = json.loads(self.state_path.read_text()) if self.state_path.is_file() else {}
@@ -140,6 +142,10 @@ class Engine:
         self.broker.cancel_open(sym)
 
         raw_target = sig.target  # the strategy's own view, before any stop or JEV exit overrides it
+        if self.filters:
+            horizon = int(self.filters.c.get("horizon_bars", 12))
+            cutoff = now - pd.Timedelta(seconds=timeframe_seconds(tf) * horizon)
+            self.journal.filter_resolve(sym, cutoff.isoformat(), price, now.isoformat())
 
         # JEV per-bar checks (one request): score old answers, ask new ones, act only to reduce risk
         regime_block, check_note = False, ""
@@ -165,6 +171,9 @@ class Engine:
         if dec.order and regime_block and self._adds_risk(dec):
             dec.order, blocked_by = None, "JEV regime"
             dec.notes.append("JEV: strategy stands aside in this regime (no new risk)")
+        if dec.order and self.filters and self._adds_risk(dec):
+            if self._filters(sym, sig, dec, df, price, now):
+                dec.order, blocked_by = None, "filters"
         if dec.order and self.jev and self._adds_risk(dec):
             jev_id, jev_p, jev_note = self._jev_review(sig, dec, acct, df, price)
             if dec.order is None:
@@ -214,7 +223,7 @@ class Engine:
             elif fill.status == "rejected":
                 self.journal.event("reject", f"{sym}: {fill.raw.get('error', fill.raw)}")
         elif dec.approved:  # risk approved an order but review removed it
-            if blocked_by.startswith("JEV"):
+            if blocked_by.startswith("JEV") or blocked_by == "filters":
                 action = f"vetoed by {blocked_by}"
             else:
                 action = "vetoed" if verdict == "veto" else f"skipped after review ({verdict})"
@@ -290,6 +299,30 @@ class Engine:
         elif block:
             note += " → standing aside"
         return block, note
+
+    def _filters(self, sym: str, sig: Signal, dec: RiskDecision, df: pd.DataFrame, price: float,
+                 now: datetime) -> bool:
+        """Run entry filters on a new-risk order. Notes go on the decision; True = skip it (act mode)."""
+        f = self.filters
+        side = 1 if dec.desired_notional > 0 else -1
+        base = {"ts": now.isoformat(), "symbol": sym, "strategy": sig.strategy, "side_sign": side, "price": price}
+        try:
+            results = f.evaluate(side, price, df, sig.atr, f.daily(sym, df, now))
+        except Exception as e:  # noqa: BLE001 - filters are advisory; never stop trading
+            log.warning("filters failed for %s: %s", sym, e)
+            self.journal.filter_check(**base, name="error", passed=1, mode="", error=str(e)[:300])
+            dec.notes.append(f"filters error: {e}"[:200])
+            return False
+        block = False
+        for r in results:
+            mode = f.mode(r.name)
+            act = mode == "act" and not r.passed
+            self.journal.filter_check(**base, name=r.name, passed=int(r.passed), applied=int(act), mode=mode,
+                                      value=r.value, note=r.note[:300])
+            tail = "" if r.passed else (" → skipped" if act else " → would skip (shadow)")
+            dec.notes.append(f"{r.name}: {r.note}{tail}")
+            block = block or act
+        return block
 
     def _jev_outcome(self, sym: str, realized: float, remaining_qty: float) -> None:
         self.journal.jev_add_pnl(sym, realized)

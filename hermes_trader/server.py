@@ -37,7 +37,7 @@ log = logging.getLogger("hermes_trader.server")
 
 TOKEN_ENV = "HERMES_TRADER_API_TOKEN"
 EXIT_ON_EOF_ENV = "HERMES_TRADER_EXIT_ON_STDIN_EOF"  # set by the desktop app: exit when it goes away
-CHAT_TOOLS = ["get_portfolio", "jev_report", "market_snapshot", "list_strategies", "strategy_book", "run_backtest", "optimize",
+CHAT_TOOLS = ["get_portfolio", "jev_report", "filter_report", "filter_backtest", "market_snapshot", "list_strategies", "strategy_book", "run_backtest", "optimize",
               "promote_strategy", "rollback_strategy", "journal_stats", "recent_trades", "recent_decisions",
               "memory", "playbook"]
 
@@ -218,10 +218,20 @@ class Service:
             out["checks"] = check_report(self.app.engine.journal.jev_check_rows(), jc)
         return out
 
+    def filters(self, q: dict[str, str]) -> dict[str, Any]:
+        from .filters import filter_report
+
+        fc = self.app.cfg["filters"]
+        rows = self.app.engine.journal.filter_rows()
+        recent = [{k: r.get(k) for k in ("ts", "symbol", "strategy", "name", "side_sign", "passed", "applied",
+                                         "mode", "value", "note", "fwd_ret", "resolved_ts", "error")}
+                  for r in rows[: min(int(q.get("n", 60)), 500)]]
+        return {"enabled": bool(fc.get("enabled", True)), **filter_report(rows, fc), "recent": recent}
+
     def config(self) -> dict[str, Any]:
         raw = self.app.cfg.raw
         keep = ("mode", "symbols", "timeframe", "history_bars", "allow_short", "default_strategy", "risk",
-                "improve", "schedule")
+                "improve", "schedule", "filters")
         out = {k: raw[k] for k in keep}
         out["broker"] = {k: v for k, v in raw["broker"].items() if k not in ("csv_dir",)}
         out["llm"] = {k: v for k, v in raw["llm"].items() if k != "api_key_env"}
@@ -340,6 +350,7 @@ def make_handler(svc: Service, token: str, port_ref: list[int]) -> type[BaseHTTP
         "/api/playbook": lambda q: {"name": q.get("name"), "text": svc.app.toolkit.playbooks.view(q.get("name", ""))},
         "/api/config": lambda q: clean(svc.config()),
         "/api/jev": lambda q: clean(svc.jev(q)),
+        "/api/filters": lambda q: clean(svc.filters(q)),
     }
     POST: dict[str, Callable[[dict[str, Any]], Any]] = {
         "/api/bot/start": lambda b: svc.start_bot(),

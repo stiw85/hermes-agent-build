@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS jev_checks (
   p REAL, side_sign INTEGER, price REAL, mode TEXT, applied INTEGER DEFAULT 0, cost REAL, model TEXT,
   error TEXT, fwd_ret REAL, resolved_ts TEXT
 );
+CREATE TABLE IF NOT EXISTS filter_checks (
+  id INTEGER PRIMARY KEY, ts TEXT, symbol TEXT, strategy TEXT, name TEXT, side_sign INTEGER, price REAL,
+  passed INTEGER, applied INTEGER DEFAULT 0, mode TEXT, value REAL, note TEXT, error TEXT,
+  fwd_ret REAL, resolved_ts TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_filter_open ON filter_checks(symbol, resolved_ts, ts);
 CREATE INDEX IF NOT EXISTS ix_fills_symbol ON fills(symbol);
 CREATE INDEX IF NOT EXISTS ix_jev_checks_open ON jev_checks(symbol, resolved_ts, ts);
 CREATE INDEX IF NOT EXISTS ix_jev_open ON jev_scores(symbol, taken, closed_ts);
@@ -157,15 +163,29 @@ class Journal:
 
     def jev_check_resolve(self, symbol: str, cutoff_ts: str, price: float, now_ts: str) -> int:
         """Score checks made at or before `cutoff_ts`: forward return in their direction up to `price`."""
+        return self._resolve("jev_checks", symbol, cutoff_ts, price, now_ts)
+
+    def _resolve(self, table: str, symbol: str, cutoff_ts: str, price: float, now_ts: str) -> int:
+        assert table in ("jev_checks", "filter_checks")
         with self.lock:
             due = self.db.execute(
-                "SELECT id, price, side_sign FROM jev_checks WHERE symbol=? AND resolved_ts IS NULL "
+                f"SELECT id, price, side_sign FROM {table} WHERE symbol=? AND resolved_ts IS NULL "
                 "AND error IS NULL AND ts <= ?", (symbol, cutoff_ts)).fetchall()
             for r in due:
                 fwd = (r["side_sign"] or 0) * (price / r["price"] - 1) if r["price"] else None
-                self.db.execute("UPDATE jev_checks SET fwd_ret=?, resolved_ts=? WHERE id=?", (fwd, now_ts, r["id"]))
+                self.db.execute(f"UPDATE {table} SET fwd_ret=?, resolved_ts=? WHERE id=?", (fwd, now_ts, r["id"]))
             self.db.commit()
             return len(due)
+
+    # ---- entry filters -------------------------------------------------------------------
+    def filter_check(self, **row: Any) -> int:
+        return self._ins("filter_checks", row)
+
+    def filter_resolve(self, symbol: str, cutoff_ts: str, price: float, now_ts: str) -> int:
+        return self._resolve("filter_checks", symbol, cutoff_ts, price, now_ts)
+
+    def filter_rows(self, n: int = 20000) -> list[dict[str, Any]]:
+        return self.rows("SELECT * FROM filter_checks ORDER BY id DESC LIMIT ?", (n,))
 
     def jev_check_rows(self, n: int = 20000) -> list[dict[str, Any]]:
         return self.rows("SELECT * FROM jev_checks ORDER BY id DESC LIMIT ?", (n,))
