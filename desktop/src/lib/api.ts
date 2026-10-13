@@ -291,28 +291,31 @@ export async function post<T>(path: string, body?: Record<string, unknown>): Pro
 export function usePoll<T>(path: string | null, intervalMs = 5000): { data: T | null; error: string | null; loading: boolean; refresh: () => void } {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
   const seq = useRef(0)
+  const lastJson = useRef<string | null>(null)
 
   const load = useCallback(async () => {
     if (!path) return
     const n = ++seq.current
-    setLoading(true)
     try {
       const d = await get<T>(path)
       if (n === seq.current) {
-        setData(d)
+        // unchanged data -> keep the same object, so pages and charts don't re-render for nothing
+        const j = JSON.stringify(d)
+        if (j !== lastJson.current) {
+          lastJson.current = j
+          setData(d)
+        }
         setError(null)
       }
     } catch (err) {
       if (n === seq.current) setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      if (n === seq.current) setLoading(false)
     }
   }, [path])
 
   useEffect(() => {
     setData(null)
+    lastJson.current = null
     void load()
     if (!intervalMs) return
     const t = setInterval(() => {
@@ -321,7 +324,7 @@ export function usePoll<T>(path: string | null, intervalMs = 5000): { data: T | 
     return () => clearInterval(t)
   }, [load, intervalMs])
 
-  return { data, error, loading, refresh: () => void load() }
+  return { data, error, loading: data === null && error === null, refresh: () => void load() }
 }
 
 export function useBackendState(): BackendState | null {

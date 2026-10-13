@@ -439,3 +439,30 @@ textarea {
 .tabular {
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- Visual effects levels (Settings → Appearance; see lib/effects.ts) ---------------------- */
+
+/* Looping animations only in "full": an endless animation keeps the compositor busy every frame. */
+:root:not([data-effects='full']) .animate-pulse-soft {
+  animation: none;
+}
+
+/* "low": no backdrop blur. Re-blurring the background is the single most expensive thing the
+   window does on a machine without GPU acceleration. Panels get near-opaque fills instead. */
+:root[data-effects='low'] .glass,
+:root[data-effects='low'] .float {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-effects='low'] .glass {
+  background: rgba(7, 22, 76, 0.9);
+}
+:root[data-effects='low'] .float {
+  background: rgba(8, 26, 84, 0.97);
+}
+:root[data-effects='low'] .backdrop-blur-sm {
+  backdrop-filter: none;
+}
+:root[data-effects='low'] .shimmer {
+  animation: none;
+}

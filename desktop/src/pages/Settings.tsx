@@ -4,6 +4,7 @@ import type { Settings } from '../../shared/ipc.ts'
 import { Banner, Chips, Field, GlassButton, GlassCard, KeyValue, PageHeader, Pill, Section, StatusDot, TextInput } from '../components/glass.tsx'
 import { useConfirm, useToast } from '../components/overlays.tsx'
 import { trader, useBackendState, usePoll, type ConfigView } from '../lib/api.ts'
+import { setEffects, useEffectsLevel, type Effects } from '../lib/effects.ts'
 import { fmtMoney, fmtPct } from '../lib/format.ts'
 import { useStatus } from '../lib/status.ts'
 
@@ -182,6 +183,8 @@ export function SettingsPage() {
             </Section>
           </GlassCard>
 
+          <AppearanceCard />
+
           <ConfigCard />
 
           <GlassCard className="p-4">
@@ -192,5 +195,31 @@ export function SettingsPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+const EFFECT_NOTES: Record<Effects, string> = {
+  low: 'Flat panels and a still background. The lightest option: use it on older machines or when the app runs all day.',
+  balanced: 'Frosted-glass panels over a still background. Little CPU once the window is drawn.',
+  full: 'Adds the moving silk background and a pulsing status light. Without GPU acceleration this can use a whole CPU core.'
+}
+
+function AppearanceCard() {
+  const effects = useEffectsLevel()
+  return (
+    <GlassCard className="p-4">
+      <Section title="Appearance">
+        <Chips
+          items={[
+            { id: 'low', label: 'Light (lowest CPU)' },
+            { id: 'balanced', label: 'Balanced' },
+            { id: 'full', label: 'Full effects' }
+          ]}
+          value={effects}
+          onChange={setEffects}
+        />
+        <p className="text-[12px] text-fg-3">{EFFECT_NOTES[effects]} Applies immediately; the trading bot is not affected.</p>
+      </Section>
+    </GlassCard>
   )
 }

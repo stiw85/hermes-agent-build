@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react'
+import { useEffectsLevel } from '../lib/effects.ts'
 
 /*
  * A calmer cousin of Herald OS's "flowing silk" wallpaper (MIT): a few slow ribbons on the
- * deep-blue field, drawn at half resolution and ~20fps, paused when hidden or motion is reduced.
+ * deep-blue field, drawn at half resolution. Still by default (drawn once); it only moves with
+ * Settings → Appearance → Full, at ~12fps, paused when hidden or motion is reduced.
  */
 const RIBBONS = Array.from({ length: 7 }, (_, i) => ({
   y: 0.18 + (i / 7) * 0.7,
@@ -44,6 +46,8 @@ function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, sc
 
 export function Wallpaper() {
   const ref = useRef<HTMLCanvasElement>(null)
+  const effects = useEffectsLevel()
+  const animate = effects === 'full'
   useEffect(() => {
     const c = ref.current
     const ctx = c?.getContext('2d')
@@ -51,27 +55,34 @@ export function Wallpaper() {
     const scale = 0.5
     let raf = 0
     let last = 0
-    let t = Math.random() * 100
+    let resizeTimer = 0
+    let t = 37 // a pleasant still frame; animation continues from here
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)')
     const size = () => {
       c.width = Math.max(1, Math.floor(window.innerWidth * scale))
       c.height = Math.max(1, Math.floor(window.innerHeight * scale))
       draw(ctx, c.width, c.height, t, scale)
     }
+    // A still wallpaper is drawn once, and again only after the window stops resizing.
+    const onResize = () => {
+      clearTimeout(resizeTimer)
+      resizeTimer = window.setTimeout(size, 150)
+    }
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame)
-      if (now - last < 50 || document.hidden || reduce.matches) return
-      t += (now - last) / 1000
+      if (now - last < 80 || document.hidden || reduce.matches) return // ~12fps is plenty for slow silk
+      t += Math.min(now - last, 200) / 1000
       last = now
       draw(ctx, c.width, c.height, t, scale)
     }
     size()
-    window.addEventListener('resize', size)
-    raf = requestAnimationFrame(frame)
+    window.addEventListener('resize', onResize)
+    if (animate) raf = requestAnimationFrame(frame)
     return () => {
       cancelAnimationFrame(raf)
-      window.removeEventListener('resize', size)
+      clearTimeout(resizeTimer)
+      window.removeEventListener('resize', onResize)
     }
-  }, [])
+  }, [animate])
   return <canvas ref={ref} aria-hidden="true" className="pointer-events-none fixed inset-0 h-full w-full" />
 }
