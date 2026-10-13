@@ -93,10 +93,13 @@ class CCXTBroker(Broker):
         name = ("publicGetKlines" if m.get("spot") else "fapiPublicGetKlines" if m.get("linear")
                 else "dapiPublicGetKlines" if m.get("inverse") else None)
         fn = getattr(self.x, name, None) if name else None
-        return (fn, m["id"]) if fn and m.get("id") else None
+        return (fn, m["id"], bool(m.get("inverse"))) if fn and m.get("id") else None
 
-    def _binance_klines(self, raw: tuple[Any, str], symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
-        fn, market_id = raw
+    def _binance_klines(self, raw: tuple[Any, str, bool], symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        fn, market_id, inverse = raw
+        # spot / USD-M: [5] base volume, [9] taker-buy base volume. COIN-M counts contracts in [5]/[9];
+        # its base-asset volumes are [7]/[10] (the units ccxt's own fetch_ohlcv uses there).
+        vi, ti = (7, 10) if inverse else (5, 9)
         interval = (getattr(self.x, "timeframes", None) or {}).get(timeframe, timeframe)
         step_ms = timeframe_seconds(timeframe) * 1000
         page = 1000
@@ -112,8 +115,8 @@ class CCXTBroker(Broker):
             start = int(batch[-1][0]) + step_ms
         if not rows:
             return to_frame([])
-        df = to_frame([[int(r[0]), *(float(x) for x in r[1:6])] for r in rows])
-        tb = pd.Series([float(r[9]) for r in rows],
+        df = to_frame([[int(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[vi])] for r in rows])
+        tb = pd.Series([float(r[ti]) for r in rows],
                        index=pd.DatetimeIndex(pd.to_datetime([int(r[0]) for r in rows], unit="ms", utc=True)))
         df["taker_buy"] = tb[~tb.index.duplicated(keep="last")].reindex(df.index)
         return df.tail(limit)

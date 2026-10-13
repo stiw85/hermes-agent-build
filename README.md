@@ -126,7 +126,7 @@ Five rule-based checks run on every **new entry**. They never touch exits. Like 
 | `levels` | Price action: don't buy into resistance | The distance to the next key level is less than `min_rr` × the ATR stop. Key levels are daily/weekly swing highs and lows, the previous day/week high and low, and round numbers |
 | `stretch` | Black-Scholes-Merton volatility maths: don't chase | The last 24 bars moved more than ±2σ in the trade's direction |
 | `flow` | Order flow | A CVD divergence points against the trade. Needs taker volume (Binance); otherwise it passes |
-| `vol` | Volatility regime | Realised vol is more than 2× normal, or implied vol is more than 1.5× realised. Implied vol comes from Deribit DVOL for BTC/ETH and CBOE VIX for stocks. In act mode it halves the size instead of skipping |
+| `vol` | Volatility regime | Realised vol is more than 2× its normal level, or implied vol is more than 1.3× its own 30-day median. Implied vol comes from Deribit DVOL for BTC/ETH and CBOE VIX for stocks. In act mode it halves the size instead of skipping |
 | `events` | Macro calendar | The entry falls within ±60 min of a listed FOMC or CPI release. The built-in list runs to 2027; keep it updated |
 
 ```bash

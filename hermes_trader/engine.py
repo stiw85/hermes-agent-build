@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from typing import Any, Callable, Protocol
 
 import pandas as pd
 
+from . import indicators as ind
 from .backtest import timeframe_seconds
 from .book import StrategyBook
 from .brokers.base import Broker
@@ -143,9 +145,12 @@ class Engine:
 
         raw_target = sig.target  # the strategy's own view, before any stop or JEV exit overrides it
         if self.filters:
-            horizon = int(self.filters.c.get("horizon_bars", 12))
-            cutoff = now - pd.Timedelta(seconds=timeframe_seconds(tf) * horizon)
-            self.journal.filter_resolve(sym, cutoff.isoformat(), price, now.isoformat())
+            try:  # scoring old filter checks is bookkeeping: never let it stop this symbol's cycle
+                horizon = int(self.filters.c.get("horizon_bars") or 12)
+                cutoff = now - pd.Timedelta(seconds=timeframe_seconds(tf) * horizon)
+                self.journal.filter_resolve(sym, cutoff.isoformat(), price, now.isoformat())
+            except Exception as e:  # noqa: BLE001
+                log.warning("filter scoring failed for %s: %s", sym, e)
 
         # JEV per-bar checks (one request): score old answers, ask new ones, act only to reduce risk
         regime_block, check_note = False, ""
@@ -153,10 +158,11 @@ class Engine:
             regime_block, check_note = self._jev_checks(sym, sig, pos, df, price, now)
 
         # protective ATR stop + no re-entry on the same side until the strategy itself resets
-        if pos and self.risk.stop_hit(pos.qty, pos.avg_price, price, sig.atr):
-            self.cooldown[sym] = 1 if pos.qty > 0 else -1
-            self.journal.event("stop", f"{sym}: ATR stop at {price:.6g} (avg {pos.avg_price:.6g})")
-            sig.target, sig.reason = 0.0, f"ATR stop hit (avg {pos.avg_price:.4g}, px {price:.4g}); " + sig.reason
+        stop_now = bool(pos and self.risk.stop_hit(pos.qty, pos.avg_price, price, sig.atr))
+        if stop_now:
+            self.cooldown[sym] = 1 if pos.qty > 0 else -1  # type: ignore[union-attr]
+            self.journal.event("stop", f"{sym}: ATR stop at {price:.6g} (avg {pos.avg_price:.6g})")  # type: ignore[union-attr]
+            sig.target, sig.reason = 0.0, f"ATR stop hit (avg {pos.avg_price:.4g}, px {price:.4g}); " + sig.reason  # type: ignore[union-attr]
         blocked = self.cooldown.get(sym)
         if blocked:
             if raw_target * blocked > 0:
@@ -164,25 +170,35 @@ class Engine:
             else:
                 self.cooldown.pop(sym, None)
 
+        # an order-flow strategy can't judge a bar without order-flow data: hold, don't exit (stops still work)
+        if getattr(strat, "needs_flow", False) and not stop_now and not ind.has_flow(df, min(len(df), 50)):
+            why = "hold: no order-flow data this bar (position kept; ATR stop still active)"
+            self.journal.decision(symbol=sym, strategy=sig.strategy, params=sig.meta.get("params"),
+                                  target=sig.target, price=price, signal_reason=sig.reason[:500], risk_notes=[why],
+                                  llm_verdict="", llm_note="", action="hold", jev_p=None, jev_note=check_note or None)
+            return {"strategy": repr(strat), "target": sig.target, "price": price, "action": "hold", "notes": [why]}
+
         dec = self.risk.size(sig, acct, price, level)
         verdict, note = "", ""
         blocked_by = ""
         jev_id, jev_p, jev_note = None, None, ""
+        filter_notes: list[str] = []  # added after the LLM review, so shadow verdicts can't sway it
         if dec.order and regime_block and self._adds_risk(dec):
-            dec.order, blocked_by = None, "JEV regime"
+            self._scale_new_risk(dec, 0.0, pos, price)
+            blocked_by = "JEV regime"
             dec.notes.append("JEV: strategy stands aside in this regime (no new risk)")
         if dec.order and self.filters and self._adds_risk(dec):
-            mult = self._filters(sym, sig, dec, df, price, now)
-            if mult <= 0:
-                dec.order, blocked_by = None, "filters"
-            elif mult < 1.0:
-                dec.order.qty *= mult
-                if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:
-                    dec.order, blocked_by = None, "filters"
+            mult, filter_notes = self._filters(sym, sig, dec, df, price, now)
+            if mult < 1.0:
+                self._scale_new_risk(dec, mult, pos, price)
+                if dec.order is None:
+                    blocked_by = "filters"
         if dec.order and self.jev and self._adds_risk(dec):
-            jev_id, jev_p, jev_note = self._jev_review(sig, dec, acct, df, price)
-            if dec.order is None:
-                blocked_by = "JEV"
+            jev_id, jev_p, jev_note, jmult = self._jev_review(sig, dec, acct, df, price)
+            if jmult < 1.0:
+                self._scale_new_risk(dec, jmult, pos, price)
+                if dec.order is None:
+                    blocked_by = "JEV"
         if dec.order and self.reviewer and self._adds_risk(dec):
             try:
                 rv = self.reviewer(sig, dec, acct, df)
@@ -192,13 +208,13 @@ class Engine:
                 on_err = self.cfg["llm"].get("on_review_error", "reduce")
                 mult = {"proceed": 1.0, "veto": 0.0}.get(on_err, 0.5)
                 verdict, note = "error", f"review failed ({on_err}, x{mult}): {e}"[:300]
-            if mult <= 0:
-                dec.order, verdict = None, "veto" if verdict != "error" else verdict
-                blocked_by = "LLM"
-            elif mult < 1.0:
-                dec.order.qty *= mult
-                if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:
-                    dec.order = None
+            if mult < 1.0:
+                self._scale_new_risk(dec, mult, pos, price)
+                if dec.order is None:
+                    blocked_by = "LLM"
+                    if mult <= 0 and verdict != "error":
+                        verdict = "veto"
+        dec.notes.extend(filter_notes)
 
         action = "hold"
         fill: Fill | None = None
@@ -240,8 +256,8 @@ class Engine:
                 "notes": dec.notes, "llm": verdict or None}
 
     def _jev_review(self, sig: Signal, dec: RiskDecision, acct: Account, df: pd.DataFrame,
-                    price: float) -> tuple[int | None, float | None, str]:
-        """Score an entry with JEV. Shadow: record only. Gate: may shrink or veto (never enlarge)."""
+                    price: float) -> tuple[int | None, float | None, str, float]:
+        """Score an entry with JEV. Shadow: record only. Gate: returns a multiplier < 1 (never enlarges)."""
         jc = self.jev.c  # type: ignore[union-attr]
         gating = self.jev.gating  # type: ignore[union-attr]
         side = dec.order.side.value  # type: ignore[union-attr]
@@ -251,23 +267,38 @@ class Engine:
         except Exception as e:  # noqa: BLE001 - JEV is an optional filter
             sid = self.journal.jev_score(**base, error=str(e)[:300], applied=0, taken=0)
             on_err = jc.get("on_error", "proceed")
+            mult = 1.0
             if gating and on_err == "veto":
-                dec.order = None
+                mult = 0.0
             elif gating and on_err == "reduce":
-                dec.order.qty *= 0.5  # type: ignore[union-attr]
-            return sid, None, f"JEV error ({on_err if gating else 'shadow'}): {e}"[:300]
+                mult = 0.5
+            return sid, None, f"JEV error ({on_err if gating else 'shadow'}): {e}"[:300], mult
         applied = gating and v.mult < 1.0
         sid = self.journal.jev_score(**base, p=v.p, regime=v.regime, regime_conf=v.regime_conf, verdict=v.verdict,
                                      applied=int(applied), cost=v.cost, model=v.model, taken=0)
         note = f"JEV p={v.p:.2f}{' · ' + v.regime if v.regime else ''} → {v.verdict}{'' if gating else ' (shadow)'}"
-        if applied:
-            if v.mult <= 0:
-                dec.order = None
-            else:
-                dec.order.qty *= v.mult  # type: ignore[union-attr]
-                if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:  # type: ignore[union-attr]
-                    dec.order = None
-        return sid, v.p, note
+        return sid, v.p, note, (max(0.0, float(v.mult)) if applied else 1.0)
+
+    def _scale_new_risk(self, dec: RiskDecision, mult: float, pos: Any, price: float) -> None:
+        """Shrink only the part of an order that adds risk. Reviews and filters never block an exit.
+
+        A flip (long -> short) is "close the long, then open a short": the closing part always goes
+        through; only the new side is scaled (and dropped if it falls below the minimum order size).
+        """
+        o = dec.order
+        if o is None or mult >= 1.0:
+            return
+        cur = float(pos.qty) if pos and pos.qty else 0.0
+        closing = min(o.qty, abs(cur)) if cur and dec.desired_notional * dec.current_notional < 0 else 0.0
+        new = max(0.0, o.qty - closing) * max(0.0, float(mult) if math.isfinite(mult) else 0.0)
+        if new * price < self.cfg["risk"]["min_order_notional"]:
+            new = 0.0
+        if closing <= 0 and new <= 0:
+            dec.order = None
+            return
+        o.qty = closing + new
+        if closing and not new:
+            dec.notes.append("new side of the flip skipped; closing the old position only")
 
     def _jev_checks(self, sym: str, sig: Signal, pos: Any, df: pd.DataFrame, price: float,
                     now: datetime) -> tuple[bool, str]:
@@ -306,10 +337,11 @@ class Engine:
         return block, note
 
     def _filters(self, sym: str, sig: Signal, dec: RiskDecision, df: pd.DataFrame, price: float,
-                 now: datetime) -> float:
-        """Run entry filters on a new-risk order. Notes go on the decision.
+                 now: datetime) -> tuple[float, list[str]]:
+        """Run entry filters on a new-risk order.
 
-        Returns the size multiplier from filters acting in act mode: 1 = untouched, 0 = skip.
+        Returns (size multiplier from filters acting in act mode: 1 = untouched, 0 = skip, notes).
+        Any failure here means "no opinion": trading carries on.
         """
         f = self.filters
         side = 1 if dec.desired_notional > 0 else -1
@@ -319,21 +351,27 @@ class Engine:
                                  implied=f.implied_vol(sym) if f.enabled("vol") else None)
         except Exception as e:  # noqa: BLE001 - filters are advisory; never stop trading
             log.warning("filters failed for %s: %s", sym, e)
-            self.journal.filter_check(**base, name="error", passed=1, mode="", error=str(e)[:300])
-            dec.notes.append(f"filters error: {e}"[:200])
-            return 1.0
-        mult = 1.0
+            try:
+                self.journal.filter_check(**base, name="error", passed=1, mode="", error=str(e)[:300])
+            except Exception:  # noqa: BLE001
+                pass
+            return 1.0, [f"filters error: {e}"[:200]]
+        mult, notes = 1.0, []
         for r in results:
             mode = f.mode(r.name)
             act = mode == "act" and not r.passed
-            self.journal.filter_check(**base, name=r.name, passed=int(r.passed), applied=int(act), mode=mode,
-                                      value=r.value, note=r.note[:300])
+            try:
+                self.journal.filter_check(**base, name=r.name, passed=int(r.passed), applied=int(act), mode=mode,
+                                          value=r.value, note=r.note[:300])
+            except Exception as e:  # noqa: BLE001 - bookkeeping only
+                log.warning("could not journal filter %s for %s: %s", r.name, sym, e)
             verb = "skip" if r.mult <= 0 else f"size x{r.mult:g}"
             tail = "" if r.passed else (f" → {verb}" if act else f" → would {verb} (shadow)")
-            dec.notes.append(f"{r.name}: {r.note}{tail}")
+            notes.append(f"{r.name}: {r.note}{tail}")
             if act:
-                mult = min(mult, max(0.0, r.mult))
-        return mult
+                m = r.mult if math.isfinite(r.mult) else 0.0
+                mult = min(mult, max(0.0, m))
+        return mult, notes
 
     def _jev_outcome(self, sym: str, realized: float, remaining_qty: float) -> None:
         self.journal.jev_add_pnl(sym, realized)

@@ -173,7 +173,7 @@ class Toolkit:
                         bars: int = 3000) -> dict:
         from ..filters import EntryFilters, evaluate_history
 
-        df = self._df(symbol, min(int(bars), 10_000))
+        df = self._df(symbol, max(300, min(int(bars), 10_000)))
         strat = make(strategy, params or {}) if strategy else self.e.book.strategy_for(symbol)
         fc = self.cfg["filters"]
         f = self.e.filters or EntryFilters(fc, self.cfg["risk"], None, self.cfg["timeframe"])

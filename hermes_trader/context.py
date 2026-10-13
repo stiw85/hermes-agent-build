@@ -100,32 +100,41 @@ def pivots(df: pd.DataFrame, k: int) -> tuple[list[float], list[float]]:
 
 def round_step(price: float) -> float:
     """Spacing of 'psychological' numbers: 60,000 -> 5,000; 3,000 -> 500; 150 -> 50; 0.62 -> 0.05."""
-    return 10 ** math.floor(math.log10(price)) / 2 if price > 0 else 0.0
+    return 10 ** math.floor(math.log10(price)) / 2 if price > 0 and math.isfinite(price) else 0.0
 
 
 def key_levels(daily: pd.DataFrame, price: float, pivot: int = 3, round_numbers: bool = True,
-               merge_frac: float = 0.25, max_dist: float = 0.25) -> list[dict[str, Any]]:
-    """Support/resistance zones near `price` from daily bars (most recent bar may be in progress).
+               merge_frac: float = 0.25, max_dist: float = 0.25, now: Any = None) -> list[dict[str, Any]]:
+    """Support/resistance zones near `price` from daily bars.
 
+    A daily bar dated today (UTC, or the day of `now`) is in progress and is not used for levels.
     Returns [{price, kinds, strength}] sorted by price, within ±max_dist (fraction) of price.
     Zones closer than merge_frac x daily ATR are merged; strength = how many sources agree.
     """
-    if daily.empty or price <= 0:
+    if daily is None or daily.empty or not (price > 0 and math.isfinite(price)):
         return []
     raw: list[tuple[float, str]] = []
-    done = daily.iloc[:-1] if len(daily) > 1 else daily  # completed days
+    today = pd.Timestamp(now if now is not None else pd.Timestamp.now(tz="UTC"))
+    today = (today.tz_localize("UTC") if today.tzinfo is None else today.tz_convert("UTC")).normalize()
+    last = daily.index[-1]
+    last = (last.tz_localize("UTC") if last.tzinfo is None else last.tz_convert("UTC")).normalize()
+    done = daily.iloc[:-1] if last >= today else daily  # completed days only
+    if done.empty:
+        return []
     hs, ls = pivots(done, pivot)
     raw += [(x, "daily swing high") for x in hs] + [(x, "daily swing low") for x in ls]
     if len(done) >= 1:
         raw += [(float(done["high"].iloc[-1]), "prev day high"), (float(done["low"].iloc[-1]), "prev day low")]
-    weekly = done.resample("W").agg({"high": "max", "low": "min", "close": "last"}).dropna()
-    if len(weekly) >= 2:
+    weekly = done.resample("W-SUN").agg({"high": "max", "low": "min", "close": "last"}).dropna()
+    if done.index[-1].dayofweek != 6:  # the latest week isn't finished (weeks end on Sunday)
+        weekly = weekly.iloc[:-1]
+    if len(weekly) >= 1:
         whs, wls = pivots(weekly, 2)
         raw += [(x, "weekly swing high") for x in whs] + [(x, "weekly swing low") for x in wls]
-        prev = weekly.iloc[-2]
+        prev = weekly.iloc[-1]
         raw += [(float(prev["high"]), "prev week high"), (float(prev["low"]), "prev week low")]
-    if round_numbers:
-        step = round_step(price)
+    step = round_step(price)
+    if round_numbers and step > 0:
         base = math.floor(price / step) * step
         raw += [(base + i * step, "round number") for i in range(-3, 5) if base + i * step > 0]
     raw = [(p, k) for p, k in raw if abs(p / price - 1) <= max_dist]
@@ -163,15 +172,18 @@ def describe_level(z: dict[str, Any] | None) -> str:
 
 
 def price_context(df: pd.DataFrame, daily: pd.DataFrame | None, horizon_bars: int = 24,
-                  pivot: int = 3, round_numbers: bool = True) -> dict[str, Any]:
+                  pivot: int = 3, round_numbers: bool = True, now: Any = None) -> dict[str, Any]:
     """Compact facts for the LLM / JEV / chart: levels, expected move, stretch, touch odds."""
+    if df is None or df.empty:
+        return {}
     price = float(df["close"].iloc[-1])
     s = sigma_per_bar(df)
     out: dict[str, Any] = {"price": price}
     if s:
         out["expected_move"] = expected_move(price, s, horizon_bars)
         out["stretch_z_24"] = round(z, 2) if (z := stretch_z(df, min(24, len(df) - 1), s)) is not None else None
-    lv = key_levels(daily if daily is not None else to_daily(df), price, pivot, round_numbers)
+    lv = key_levels(daily if daily is not None else to_daily(df), price, pivot, round_numbers,
+                    now=now if now is not None else df.index[-1])
     a = float(ind.atr(df).iloc[-1]) if len(df) > 15 else float("nan")
     sup, res = nearest_levels(lv, price, a * 0.25 if math.isfinite(a) else 0.0)
     out["levels"] = [{"price": round(z["price"], 8), "kinds": z["kinds"], "strength": z["strength"]} for z in lv]

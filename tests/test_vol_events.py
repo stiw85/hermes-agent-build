@@ -24,13 +24,18 @@ def mk(**over):
 
 
 def test_parse_events_timezones():
-    ev = parse_events(["2026-10-28 14:00 America/New_York FOMC", "2026-12-09 14:00 America/New_York FOMC",
-                       "2026-11-10T13:30Z CPI (Oct)", "2026-11-11 09:00 UTC thing"])
+    ev, errs = parse_events(["2026-10-28 14:00 America/New_York FOMC", "2026-12-09 14:00 America/New_York FOMC",
+                             "2026-11-10T13:30Z CPI (Oct)", "2026-11-11 09:00 utc thing"])
+    assert not errs
     assert ev[0] == (datetime(2026, 10, 28, 18, 0, tzinfo=UTC), "FOMC")  # EDT: UTC-4
     assert ev[1] == (datetime(2026, 11, 10, 13, 30, tzinfo=UTC), "CPI (Oct)")
+    assert ev[2] == (datetime(2026, 11, 11, 9, 0, tzinfo=UTC), "thing")  # utc in any case
     assert ev[3] == (datetime(2026, 12, 9, 19, 0, tzinfo=UTC), "FOMC")  # EST after Nov 1: UTC-5
-    with pytest.raises(ValueError, match="bad event"):
-        parse_events(["next tuesday-ish"])
+    # ambiguous abbreviations and junk are reported and skipped, never guessed, never fatal
+    ev2, errs2 = parse_events(["2026-10-28 14:00 EST FOMC", "next tuesday-ish", "2026-11-10 08:30 America/New_York CPI"])
+    assert len(ev2) == 1 and len(errs2) == 2 and "ambiguous" in errs2[0]
+    f = EntryFilters({**DEFAULTS["filters"], "events": {"dates": ["2026-10-28 14:00 EST FOMC"]}}, DEFAULTS["risk"])
+    assert f.events == [] and f.event_errors  # the bot still starts
     assert len(EntryFilters(DEFAULTS["filters"], DEFAULTS["risk"]).events) >= 10  # built-in list parses
 
 
@@ -61,11 +66,12 @@ def test_vol_regime_realised_and_implied():
     wild["close"] = c
     bad = f.check_vol(wild, "BTC/USDT")
     assert not bad.passed and bad.mult == 0.5 and "trade smaller" in bad.note
-    # options pricing a much bigger move than recent reality
-    rv = float(np.log(calm["close"]).diff().std() * np.sqrt(365 * 24)) * 100
-    iv_hot = f.check_vol(calm, "BTC/USDT", (rv * 2.0, "Deribit DVOL BTC"))
-    assert not iv_hot.passed and "Deribit DVOL BTC" in iv_hot.note
-    assert f.check_vol(calm, "BTC/USDT", (rv * 1.1, "Deribit DVOL BTC")).passed
+    # implied vol jumping well above its own 30-day median: options expect trouble
+    iv_hot = f.check_vol(calm, "BTC/USDT", (78.0, 50.0, "Deribit DVOL BTC"))
+    assert not iv_hot.passed and "Deribit DVOL BTC 78% vs 50% 30-day median" in iv_hot.note
+    assert f.check_vol(calm, "BTC/USDT", (55.0, 50.0, "Deribit DVOL BTC")).passed
+    # a high-but-normal level (no jump) is not stress: compared like for like, not with realised vol
+    assert f.check_vol(calm, "AAPL", (35.0, 34.0, "CBOE VIX (S&P 500)")).passed
 
 
 class Resp:
@@ -93,16 +99,19 @@ class Sess:
 
 
 def test_implied_vol_feeds_and_cache():
-    s = Sess([Resp({"result": {"data": [[1, 50, 51, 49, 52.5], [2, 52, 55, 51, 54.0]], "continuation": None}}),
-              Resp(text="DATE,OPEN,HIGH,LOW,CLOSE\n10/09/2026,15,16,14,15.5\n10/12/2026,16,19,15,18.25\n")])
+    dvol = [[i, 0, 0, 0, v] for i, v in enumerate([48.0, 50.0, 52.0, 49.0, 51.0, 66.0])]
+    vix_rows = "\n".join(f"10/{d:02d}/2026,15,16,14,{c}" for d, c in enumerate([15, 16, 15, 17, 16, 24.5], 1))
+    s = Sess([Resp({"result": {"data": dvol, "continuation": None}}),
+              Resp(text=f"DATE,OPEN,HIGH,LOW,CLOSE\n{vix_rows}\n")])
     iv = ImpliedVol(session=s)
-    assert iv.for_symbol("BTC/USDT") == (54.0, "Deribit DVOL BTC")
-    assert iv.for_symbol("BTC/USDT") == (54.0, "Deribit DVOL BTC")  # cached: no second request
-    assert s.calls[0][1]["currency"] == "BTC" and s.calls[0][1]["resolution"] == "3600"
-    assert iv.for_symbol("AAPL") == (18.25, "CBOE VIX")
+    assert iv.for_symbol("BTC/USDT") == (66.0, 50.5, "Deribit DVOL BTC")  # latest, 30-day median
+    assert iv.for_symbol("BTC/USDT") == (66.0, 50.5, "Deribit DVOL BTC")  # cached: no second request
+    p = s.calls[0][1]
+    assert p["currency"] == "BTC" and p["resolution"] == "43200" and p["end_timestamp"] - p["start_timestamp"] > 30 * 86_400_000
+    assert iv.for_symbol("AAPL") == (24.5, 16.0, "CBOE VIX (S&P 500)")
     assert iv.for_symbol("SOL/USDT") is None  # no DVOL for it
     assert len(s.calls) == 2
-    frac = ImpliedVol(session=Sess([Resp({"result": {"data": [[1, 0.5, 0.5, 0.5, 0.55]]}})]))
+    frac = ImpliedVol(session=Sess([Resp({"result": {"data": [[1, 0, 0, 0, 0.5], [2, 0, 0, 0, 0.55]]}})]))
     assert frac.for_symbol("ETH/USDT")[0] == pytest.approx(55.0)
     down = ImpliedVol(session=Sess([ConnectionError("blocked")]))
     assert down.for_symbol("ETH/USDT") is None  # failures are just "no data"

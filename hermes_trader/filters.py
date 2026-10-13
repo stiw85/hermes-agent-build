@@ -17,6 +17,7 @@ Filters
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,6 +31,7 @@ from .backtest import timeframe_seconds
 from .context import describe_level, key_levels, nearest_levels, p_touch, sigma_per_bar, stretch_z, to_daily
 
 FILTER_NAMES = ("levels", "stretch", "flow", "vol", "events")
+log = logging.getLogger("hermes_trader.filters")
 
 
 @dataclass
@@ -41,30 +43,40 @@ class FilterResult:
     mult: float = 0.0  # in act mode a failing filter scales size by this; 0 = skip the entry
 
 
-def parse_events(items: list[Any]) -> list[tuple[datetime, str]]:
-    """'2026-10-28 14:00 America/New_York FOMC' | '2026-11-10T13:30Z CPI' -> [(utc datetime, label)]."""
+_TZ_ABBREV = {"EST", "EDT", "CST", "CDT", "MST", "MDT", "PST", "PDT", "ET", "CT", "PT", "BST", "CET", "CEST",
+              "AEST", "AEDT", "AWST", "JST", "IST", "HKT", "SGT"}
+
+
+def parse_events(items: list[Any]) -> tuple[list[tuple[datetime, str]], list[str]]:
+    """'2026-10-28 14:00 America/New_York FOMC' | '2026-11-10T13:30Z CPI' -> ([(utc time, label)], errors).
+
+    Zones must be IANA names (America/New_York) or UTC/Z: abbreviations like EST are ambiguous across
+    daylight saving, so they are rejected rather than guessed. A bad line is reported and skipped.
+    """
     from zoneinfo import ZoneInfo
 
-    out = []
+    out, errors = [], []
     for raw in items or []:
         parts = str(raw).split()
         if not parts:
             continue
         try:
             if "T" in parts[0]:
-                when, rest = parts[0].replace("Z", "+00:00"), parts[1:]
+                when, rest = parts[0].replace("Z", "+00:00").replace("z", "+00:00"), parts[1:]
             else:
                 when, rest = f"{parts[0]}T{parts[1] if len(parts) > 1 else '00:00'}", parts[2:]
-            tz = None
-            if rest and ("/" in rest[0] or rest[0].upper() in ("UTC", "Z")):
-                tz, rest = rest[0], rest[1:]
+            tz = "UTC"
+            if rest and ("/" in rest[0] or rest[0].upper() in ("UTC", "Z", "GMT")):
+                tz, rest = ("UTC" if rest[0].upper() in ("UTC", "Z", "GMT") else rest[0]), rest[1:]
+            elif rest and rest[0].upper().strip(",") in _TZ_ABBREV:
+                raise ValueError(f"time zone '{rest[0]}' is ambiguous; use an IANA name such as America/New_York")
             dt = datetime.fromisoformat(when)
             if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=ZoneInfo("UTC" if tz in (None, "Z", "z") else tz))
+                dt = dt.replace(tzinfo=ZoneInfo(tz))
             out.append((dt.astimezone(ZoneInfo("UTC")), " ".join(rest) or "event"))
         except (ValueError, KeyError) as e:
-            raise ValueError(f"bad event {raw!r}: use 'YYYY-MM-DD HH:MM Area/City Name' ({e})") from None
-    return sorted(out)
+            errors.append(f"skipped event {raw!r}: {e}. Format: 'YYYY-MM-DD HH:MM Area/City Name'")
+    return sorted(out), errors
 
 
 def _finite(x: Any) -> float | None:
@@ -83,7 +95,9 @@ class EntryFilters:
         self.broker = broker
         self.tf = timeframe
         self._daily: dict[str, tuple[str, pd.DataFrame]] = {}
-        self.events = parse_events(self.sub("events").get("dates") or [])
+        self.events, self.event_errors = parse_events(self.sub("events").get("dates") or [])
+        for err in self.event_errors:
+            log.warning(err)
         self.iv: Any = None  # vol.ImpliedVol, attached by the runtime when vol.iv is on
 
     # ---- config ------------------------------------------------------------------------------
@@ -130,10 +144,10 @@ class EntryFilters:
     # ---- checks ------------------------------------------------------------------------------
     def evaluate(self, side: int, price: float, df: pd.DataFrame, atr: float | None,
                  daily: pd.DataFrame, symbol: str = "", now: datetime | None = None,
-                 implied: tuple[float, str] | None = None) -> list[FilterResult]:
+                 implied: tuple[float, float, str] | None = None) -> list[FilterResult]:
         out = []
         if self.enabled("levels"):
-            out.append(self.check_levels(side, price, df, atr, daily))
+            out.append(self.check_levels(side, price, df, atr, daily, now))
         if self.enabled("stretch"):
             out.append(self.check_stretch(side, df))
         if self.enabled("flow"):
@@ -144,7 +158,7 @@ class EntryFilters:
             out.append(self.check_events(now or df.index[-1].to_pydatetime()))
         return out
 
-    def implied_vol(self, symbol: str) -> tuple[float, str] | None:
+    def implied_vol(self, symbol: str) -> tuple[float, float, str] | None:
         if self.iv is None or not self.sub("vol").get("iv", True):
             return None
         try:
@@ -153,13 +167,15 @@ class EntryFilters:
             return None
 
     def check_levels(self, side: int, price: float, df: pd.DataFrame, atr: float | None,
-                     daily: pd.DataFrame) -> FilterResult:
+                     daily: pd.DataFrame, now: datetime | None = None) -> FilterResult:
         lc = self.sub("levels")
         atr = _finite(atr)
-        if not atr:
+        if not atr or not (price > 0):
             return FilterResult("levels", True, None, "no ATR yet")
-        lv = key_levels(daily, price, int(lc.get("pivot", 3)), bool(lc.get("round_numbers", True)))
-        sup, res = nearest_levels(lv, price, 0.25 * atr)
+        lv = key_levels(daily, price, int(lc.get("pivot", 3)), bool(lc.get("round_numbers", True)),
+                        now=now if now is not None else df.index[-1])
+        # the level in front counts however close it is: buying just under resistance has ~no room
+        sup, res = nearest_levels(lv, price, 0.0)
         target = res if side > 0 else sup
         if target is None:
             return FilterResult("levels", True, None, "open air: no key level in the way")
@@ -199,8 +215,9 @@ class EntryFilters:
         return FilterResult("flow", not against, round(share, 4), note)
 
 
-    def check_vol(self, df: pd.DataFrame, symbol: str = "", implied: tuple[float, str] | None = None) -> FilterResult:
-        """Volatility regime: recent realised vol exploding vs normal, or options pricing a big move."""
+    def check_vol(self, df: pd.DataFrame, symbol: str = "",
+                  implied: tuple[float, float, str] | None = None) -> FilterResult:
+        """Volatility regime: realised vol exploding vs its normal, or implied vol jumping vs its own norm."""
         from .backtest import periods_per_year
         from .brokers.base import asset_class_of
 
@@ -217,11 +234,11 @@ class EntryFilters:
         exp = rv_s / rv_l
         parts = [f"realised vol {rv_s:.0%} over {short} bars vs {rv_l:.0%} normal (x{exp:.1f})"]
         stressed = exp > float(vc.get("max_expansion", 2.0))
-        if implied:
-            iv, src = implied
-            prem = iv / 100 / rv_l
-            parts.append(f"{src} {iv:.0f}% = x{prem:.1f} realised")
-            stressed = stressed or prem > float(vc.get("max_iv_premium", 1.5))
+        if implied and implied[1] > 0:
+            iv, base, src = implied
+            jump = iv / base
+            parts.append(f"{src} {iv:.0f}% vs {base:.0f}% 30-day median (x{jump:.2f})")
+            stressed = stressed or jump > float(vc.get("max_iv_jump", 1.3))
         note = "; ".join(parts) + ("; stressed: trade smaller" if stressed else "")
         return FilterResult("vol", not stressed, round(exp, 3), note, mult=float(vc.get("reduce_to", 0.5)))
 
@@ -294,8 +311,9 @@ def evaluate_history(df: pd.DataFrame, targets: pd.Series, filters: EntryFilters
     sign = np.sign(t)
     atr = ind.atr(df).to_numpy(float)
     daily_full = daily if daily is not None else to_daily(df)
-    per: dict[str, dict[str, list[tuple[float, float | None]]]] = {
+    per: dict[str, dict[str, list[tuple[float, float | None, float]]]] = {
         n: {"blocked": [], "passed": []} for n in filters.names()}
+    step = pd.Timedelta(seconds=timeframe_seconds(filters.tf))
     entries = 0
     rows: list[dict[str, Any]] = []
     start = max(30, int(filters.sub("stretch").get("vol_bars", 100)))
@@ -317,24 +335,26 @@ def evaluate_history(df: pd.DataFrame, targets: pd.Series, filters: EntryFilters
                                      "low": [part["low"].min()], "close": [part["close"].iloc[-1]],
                                      "volume": [part["volume"].sum()]}, index=[day])])
         entries += 1
-        verdicts = filters.evaluate(side, float(close[i]), hist, atr[i], d, now=df.index[i].to_pydatetime())
+        # live decisions happen when bar i closes, i.e. at its open time + one bar
+        verdicts = filters.evaluate(side, float(close[i]), hist, atr[i], d, now=(df.index[i] + step).to_pydatetime())
         for r in verdicts:
-            per[r.name]["passed" if r.passed else "blocked"].append((trade, fwd))
+            per[r.name]["passed" if r.passed else "blocked"].append((trade, fwd, max(0.0, r.mult)))
         if details:
             rows.append({"ts": str(df.index[i]), "side": side, "trade_pct": round(trade * 100, 3),
                          **{r.name: {"passed": r.passed, "value": r.value, "note": r.note} for r in verdicts}})
     out: dict[str, Any] = {"entries": entries, "horizon_bars": horizon, "filters": {}}
     for name, g in per.items():
-        def stats(xs: list[tuple[float, float | None]]) -> dict[str, Any]:
-            tr = [a for a, _ in xs]
-            fw = [b for _, b in xs if b is not None]
+        def stats(xs: list[tuple[float, float | None, float]]) -> dict[str, Any]:
+            tr = [a for a, _, _ in xs]
+            fw = [b for _, b, _ in xs if b is not None]
             return {"n": len(xs), "avg_trade_pct": _avg(tr), "win_rate": round(float(np.mean([a > 0 for a in tr])), 3)
                     if tr else None, "avg_fwd_pct": _avg(fw)}
         b, p = stats(g["blocked"]), stats(g["passed"])
-        bt, pt = [a for a, _ in g["blocked"]], [a for a, _ in g["passed"]]
+        bt, pt = [a for a, _, _ in g["blocked"]], [a for a, _, _ in g["passed"]]
+        kept_of_blocked = [a * m for a, _, m in g["blocked"]]  # a "reduce" filter keeps part of the trade
         out["filters"][name] = {
             "blocked": b, "passed": p,
-            "pnl_if_acting_pct": round((float(np.sum(pt)) if pt else 0.0) * 100, 3),
+            "pnl_if_acting_pct": round(float(np.sum(pt) + np.sum(kept_of_blocked)) * 100, 3),
             "pnl_without_pct": round((float(np.sum(pt + bt)) if pt or bt else 0.0) * 100, 3),
             "verdict": _verdict(bt, pt, 10),
         }

@@ -23,6 +23,7 @@ class Strategy(ABC):
     description: ClassVar[str] = ""
     defaults: ClassVar[dict[str, Any]] = {}
     grid: ClassVar[dict[str, list[Any]]] = {}
+    needs_flow: ClassVar[bool] = False  # True: can't judge a bar without order-flow (taker volume) data
 
     def __init__(self, **params: Any) -> None:
         unknown = set(params) - set(self.defaults)

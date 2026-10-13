@@ -66,12 +66,12 @@ def test_key_levels_zones_and_nearest():
     # a swing high at ~110, a swing low at ~90, price now 100: resistance above, support below
     closes = [100, 102, 104, 106, 108, 110, 108, 104, 100, 96, 92, 90, 92, 96, 98, 100, 100, 100]
     d = frame(closes)
-    lv = cx.key_levels(d, 100.0, pivot=3, round_numbers=False)
+    lv = cx.key_levels(d, 100.0, pivot=3, round_numbers=False, now=d.index[-1])  # last row = today, in progress
     sup, res = cx.nearest_levels(lv, 100.0, 0.5)
     assert res and res["price"] == pytest.approx(110.5, abs=0.6) and "daily swing high" in res["kinds"]
     assert sup and sup["price"] == pytest.approx(91.5, abs=0.1) and "prev week low" in sup["kinds"]  # nearer than the swing
     assert any(z["price"] == pytest.approx(89.5, abs=0.6) and "daily swing low" in z["kinds"] for z in lv)
-    lv2 = cx.key_levels(d, 100.0, pivot=3, round_numbers=True)
+    lv2 = cx.key_levels(d, 100.0, pivot=3, round_numbers=True, now=d.index[-1])
     assert any("round number" in z["kinds"] for z in lv2)
 
 
@@ -85,18 +85,35 @@ def mk_filters(**over):
 def test_levels_filter_room():
     closes = [100, 102, 104, 106, 108, 110, 108, 104, 100, 96, 92, 90, 92, 96, 98, 100, 100, 100]
     d = frame(closes)
+    today = d.index[-1]
     hourly = make_df(300)
     f = mk_filters(levels={"enabled": True, "min_rr": 1.5, "pivot": 3, "round_numbers": False})
-    # stop = 2 x ATR. ATR 2 -> stop 4; resistance ~110.5 is 10.5 away -> 2.6R: passes
-    ok = f.check_levels(1, 100.0, hourly, 2.0, d)
-    assert ok.passed and ok.value == pytest.approx(2.6, abs=0.2) and "resistance" in ok.note
-    # ATR 5 -> stop 10 -> ~1.05R: too little room before resistance
-    tight = f.check_levels(1, 100.0, hourly, 5.0, d)
-    assert not tight.passed
+    # price 101 is above yesterday's high (100.5): the next resistance is the ~110.5 swing high.
+    # ATR 2 -> stop 4; 9.5 of room -> ~2.4R: passes
+    ok = f.check_levels(1, 101.0, hourly, 2.0, d, today)
+    assert ok.passed and ok.value == pytest.approx(2.4, abs=0.2) and "resistance" in ok.note
+    # ATR 5 -> stop 10 -> under 1R of room: fails
+    assert not f.check_levels(1, 101.0, hourly, 5.0, d, today).passed
+    # right under a level counts as no room, however close (review finding: used to pass as "open air")
+    for px in (106.0, 109.0, 110.2):
+        r = f.check_levels(1, px, hourly, 2.0, d, today)
+        assert not r.passed, (px, r.note)
     # shorts look down to support
-    assert "support" in f.check_levels(-1, 100.0, hourly, 2.0, d).note
+    assert "support" in f.check_levels(-1, 101.0, hourly, 2.0, d, today).note
     # above every level: nothing in the way
-    assert f.check_levels(1, 200.0, hourly, 2.0, d).note.startswith("open air")
+    assert f.check_levels(1, 200.0, hourly, 2.0, d, today).note.startswith("open air")
+
+
+def test_prev_week_levels_use_the_week_that_just_ended():
+    # Mon 2026-05-18 .. Mon 2026-06-01; the week May 25-31 has high 120.5 / low 79.5
+    idx = pd.date_range("2026-05-18", "2026-06-01", freq="D", tz="UTC")
+    closes = [100.0] * 7 + [100, 120, 100, 80, 100, 100, 100] + [100]
+    d = frame(closes)
+    d.index = idx
+    monday = idx[-1]
+    lv = cx.key_levels(d, 100.0, pivot=3, round_numbers=False, now=monday)
+    kinds = {k: z["price"] for z in lv for k in z["kinds"]}
+    assert kinds["prev week high"] == pytest.approx(120.5) and kinds["prev week low"] == pytest.approx(79.5)
 
 
 def test_stretch_filter_blocks_chasing_only_in_trade_direction():

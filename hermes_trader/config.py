@@ -91,9 +91,10 @@ DEFAULTS: dict[str, Any] = {
         "levels": {"enabled": True, "min_rr": 1.5, "pivot": 3, "round_numbers": True, "lookback": 180},
         "stretch": {"enabled": True, "bars": 24, "max_z": 2.0, "vol_bars": 100},
         "flow": {"enabled": True, "bars": 24},
-        # volatility regime: realised vol exploding, or options (Deribit DVOL / CBOE VIX) pricing a big move
+        # volatility regime: realised vol exploding vs its norm, or implied vol (Deribit DVOL for BTC/ETH,
+        # CBOE VIX for stocks) jumping above its own 30-day median
         "vol": {"enabled": True, "short_bars": 24, "long_bars": 720, "max_expansion": 2.0, "iv": True,
-                "max_iv_premium": 1.5, "reduce_to": 0.5},
+                "max_iv_jump": 1.3, "reduce_to": 0.5},
         # scheduled macro events (times with an IANA zone; FOMC 2:00pm ET, CPI 8:30am ET). Keep it updated.
         "events": {"enabled": True, "before_minutes": 60, "after_minutes": 60, "action": "skip", "dates": [
             "2026-10-28 14:00 America/New_York FOMC",

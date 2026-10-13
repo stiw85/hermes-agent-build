@@ -226,7 +226,7 @@ class Service:
         rows = self.app.engine.journal.filter_rows()
         recent = [{k: r.get(k) for k in ("ts", "symbol", "strategy", "name", "side_sign", "passed", "applied",
                                          "mode", "value", "note", "fwd_ret", "resolved_ts", "error")}
-                  for r in rows[: min(int(q.get("n", 60)), 500)]]
+                  for r in rows[: max(0, min(int(q.get("n", 60)), 500))]]
         return {"enabled": bool(fc.get("enabled", True)), **filter_report(rows, fc), "recent": recent}
 
     def config(self) -> dict[str, Any]:
@@ -265,7 +265,8 @@ class Service:
                 zip(df.index, df[["open", "high", "low", "close", "volume"]].to_numpy(), strict=True)]
         cvd_series = None
         if ind.has_flow(df, min(len(df), 50)):
-            cvd_series = [round(float(x), 4) for x in ind.cvd(df).fillna(0.0).to_numpy()]
+            filled = df.assign(taker_buy=df["taker_buy"].ffill().fillna(df["volume"] / 2))  # gaps: no spikes
+            cvd_series = [round(float(x), 4) for x in ind.cvd(filled).to_numpy()]
         jev_now = self.app.engine.journal.jev_latest_check(sym)
         if jev_now:
             jev_now = {k: jev_now.get(k) for k in ("ts", "regime", "regime_conf", "p", "mode", "applied", "error")}

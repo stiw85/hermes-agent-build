@@ -209,6 +209,7 @@ class FlowReversal(Strategy):
                    "that bar's high with net buying (initiation) -> long. Stop below the zone, target the prior "
                    "N-bar high. cvd=1 also needs a bullish CVD divergence. Mirror for shorts. Inactive without "
                    "order-flow data.")
+    needs_flow = True
     defaults = {"zone_bars": 48, "zone_atr": 1.0, "absorb": 0.15, "cvd": 0}
     grid = {"zone_bars": [24, 48, 96], "zone_atr": [0.5, 1.0], "absorb": [0.1, 0.2], "cvd": [0, 1]}
 
@@ -221,12 +222,14 @@ class FlowReversal(Strategy):
 
     def targets(self, df: pd.DataFrame) -> pd.Series:
         n = len(df)
-        if not ind.has_flow(df, min(n, 50)):
+        if "taker_buy" not in df.columns:
             return pd.Series(0.0, index=df.index)
         p = self.params
         N, za, ab, need_cvd = p["zone_bars"], p["zone_atr"], p["absorb"], bool(p["cvd"])
         o, h, lo, c, v = (df[k].to_numpy(float) for k in ("open", "high", "low", "close", "volume"))
-        share = np.divide(ind.delta(df).to_numpy(float), v, out=np.zeros(n), where=v > 0)
+        tb = df["taker_buy"].to_numpy(float)
+        ok = np.isfinite(tb) & (v > 0)  # bars with usable order flow; others can't start or confirm a setup
+        share = np.divide(2 * np.nan_to_num(tb) - v, v, out=np.zeros(n), where=ok)
         atr = ind.atr(df).to_numpy(float)
         div = ind.cvd_divergence(df, N).to_numpy() if need_cvd else np.zeros(n, dtype=int)
         zl = pd.Series(lo).rolling(N).min().shift(1).to_numpy()  # zone from the previous N bars
@@ -244,6 +247,9 @@ class FlowReversal(Strategy):
             elif pos < 0 and (c[t] > stop or c[t] <= target):
                 pos = 0
             mid = (h[t] + lo[t]) / 2
+            if not ok[t]:  # no order flow on this bar: exits above still ran; no new setups or entries
+                out[t] = pos
+                continue
             # initiation: clears the absorption bar with aggression on our side
             if cand_long and t - cand_long[0] <= 3 and pos <= 0 and c[t] > cand_long[1] and share[t] > 0 \
                     and (not need_cvd or div[cand_long[0]: t + 1].max() > 0):
