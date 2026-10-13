@@ -1,10 +1,10 @@
-import { IconArrowUp, IconBrain, IconBulb, IconGauge, IconMessageCircle, IconNotebook, IconTool, IconTrash } from '@tabler/icons-react'
+import { IconArrowUp, IconBrain, IconBulb, IconFilter, IconGauge, IconMessageCircle, IconNotebook, IconPlayerPlay, IconTool, IconTrash } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Banner, EmptyGlass, GlassButton, GlassCard, PageHeader, Pill, Section, Stat, Tabs } from '../components/glass.tsx'
+import { Banner, EmptyGlass, GlassButton, GlassCard, PageHeader, Pill, Section, Select, Stat, Tabs } from '../components/glass.tsx'
 import { HermesMark } from '../components/Shell.tsx'
-import { get, post, usePoll, type JevReport } from '../lib/api.ts'
+import { get, post, usePoll, type FilterName, type FilterReplay, type FilterReport, type JevReport, type StrategyDef } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { fmtNum, fmtPct, fmtSigned, fmtTime } from '../lib/format.ts'
 import { useStatus } from '../lib/status.ts'
@@ -314,8 +314,163 @@ function JevPanel() {
   )
 }
 
+const FILTER_LABEL: Record<FilterName, { name: string; what: string }> = {
+  levels: { name: 'Key-level room', what: 'Enough distance to the next support/resistance vs the stop?' },
+  stretch: { name: 'Stretch (σ)', what: "Don't chase a move already beyond ±2σ." },
+  flow: { name: 'Order flow', what: 'No long into a bearish CVD divergence (shorts: bullish).' },
+  vol: { name: 'Volatility regime', what: 'Volatility exploding, or options pricing a big move: trade smaller.' },
+  events: { name: 'Event blackout', what: 'No new entries around FOMC / CPI.' }
+}
+const FILTER_ORDER: FilterName[] = ['levels', 'stretch', 'flow', 'vol', 'events']
+
+const signedPct = (v: number | null | undefined, d = 2) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}%`)
+const toneOf = (v: number | null | undefined) => (v == null ? 'text-fg-4' : v > 0 ? 'text-ok' : v < 0 ? 'text-danger' : 'text-fg-3')
+
+function Replay() {
+  const { status } = useStatus()
+  const symbols = status?.symbols ?? []
+  const strategies = usePoll<StrategyDef[]>('/api/strategies', 0).data ?? []
+  const [sym, setSym] = useState('')
+  const [strat, setStrat] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [out, setOut] = useState<FilterReplay | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const symbol = sym || symbols[0] || ''
+  const run = async () => {
+    setBusy(true)
+    setErr(null)
+    try {
+      setOut(await post<FilterReplay>('/api/filters/replay', { symbol, ...(strat ? { strategy: strat } : {}), bars: 3000 }))
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex flex-col gap-2.5 border-t border-line pt-3">
+      <div className="text-[13px] font-semibold text-fg">Replay history</div>
+      <p className="text-[12px] text-fg-3">Run a strategy's past entries through the filters now, instead of waiting weeks for shadow results.</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Select label="Symbol" value={symbol} onChange={setSym} options={symbols.map(x => ({ value: x, label: x }))} />
+        <Select label="Strategy" value={strat} onChange={setStrat} options={[{ value: '', label: 'Current strategy' }, ...strategies.map(x => ({ value: x.name, label: x.name }))]} />
+        <GlassButton variant="primary" disabled={busy || !symbol} onClick={run}>
+          <IconPlayerPlay /> {busy ? 'Replaying…' : 'Replay 3000 bars'}
+        </GlassButton>
+      </div>
+      {err && <Banner tone="danger" title="Replay failed">{err}</Banner>}
+      {out && (
+        <div>
+          <div className="mb-1.5 text-[12px] text-fg-3">
+            {out.strategy} · {out.entries} entries over {out.bars} bars
+          </div>
+          <table className="tabular w-full text-[12px]">
+            <thead>
+              <tr className="text-left text-fg-3">
+                <th className="pb-1.5 font-medium">Filter</th>
+                <th className="pb-1.5 text-right font-medium">Would block</th>
+                <th className="pb-1.5 text-right font-medium">Blocked trades avg</th>
+                <th className="pb-1.5 text-right font-medium">Kept trades avg</th>
+                <th className="pb-1.5 text-right font-medium">Total: acting / not</th>
+              </tr>
+            </thead>
+            <tbody>
+              {FILTER_ORDER.filter(n => out.filters[n]).map(n => {
+                const f = out.filters[n]
+                return (
+                  <tr key={n} className="border-t border-line" title={f.verdict}>
+                    <td className="py-1.5 text-fg-2">{FILTER_LABEL[n].name}</td>
+                    <td className="py-1.5 text-right">{f.blocked.n}</td>
+                    <td className={cn('py-1.5 text-right', toneOf(f.blocked.avg_trade_pct))}>{signedPct(f.blocked.avg_trade_pct)}</td>
+                    <td className={cn('py-1.5 text-right', toneOf(f.passed.avg_trade_pct))}>{signedPct(f.passed.avg_trade_pct)}</td>
+                    <td className="py-1.5 text-right">
+                      <span className={f.pnl_if_acting_pct > f.pnl_without_pct ? 'text-ok' : 'text-fg-3'}>{signedPct(f.pnl_if_acting_pct, 1)}</span>
+                      <span className="text-fg-4"> / {signedPct(f.pnl_without_pct, 1)}</span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <p className="mt-1.5 text-[11px] text-fg-4">A filter helps when the trades it would block averaged worse than the ones it keeps, and the total is higher when acting. Hover a row for the verdict.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FiltersPanel() {
+  const r = usePoll<FilterReport>('/api/filters?n=40', 20_000).data
+  if (!r) return <div className="shimmer h-40 rounded-lg" />
+  if (!r.enabled) {
+    return <EmptyGlass icon={<IconFilter />} title="Entry filters are off" description={<>Set <code className="font-mono">filters.enabled: true</code> in config.yaml and restart the backend.</>} />
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-[12px] text-fg-3">
+        Rule-based checks on every new entry, from price action, volatility maths and order flow. In <b className="text-fg-2">shadow</b> they only record what they would do; switch one to{' '}
+        <code className="font-mono">mode: act</code> in config.yaml once its numbers show an edge. They never touch exits.
+      </p>
+      <table className="tabular w-full text-[12px]">
+        <thead>
+          <tr className="text-left text-fg-3">
+            <th className="pb-1.5 font-medium">Filter</th>
+            <th className="pb-1.5 text-right font-medium">Checks</th>
+            <th className="pb-1.5 text-right font-medium">Would block</th>
+            <th className="pb-1.5 text-right font-medium">Next {r.horizon_bars} bars: blocked / kept</th>
+          </tr>
+        </thead>
+        <tbody>
+          {FILTER_ORDER.filter(n => r.filters[n]).map(n => {
+            const f = r.filters[n]
+            return (
+              <tr key={n} className="border-t border-line align-top">
+                <td className="py-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className={f.enabled ? 'text-fg' : 'text-fg-4'}>{FILTER_LABEL[n].name}</span>
+                    <Pill tone={!f.enabled ? 'muted' : f.mode === 'act' ? 'warn' : 'info'} className="h-[18px] text-[10px]">
+                      {f.enabled ? f.mode : 'off'}
+                    </Pill>
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-fg-4">{f.recommendation}</div>
+                </td>
+                <td className="py-1.5 text-right">{f.checks}</td>
+                <td className="py-1.5 text-right">{f.would_block}</td>
+                <td className="py-1.5 text-right">
+                  <span className={toneOf(f.avg_fwd_pct_blocked)}>{signedPct(f.avg_fwd_pct_blocked, 3)}</span>
+                  <span className="text-fg-4"> / </span>
+                  <span className={toneOf(f.avg_fwd_pct_passed)}>{signedPct(f.avg_fwd_pct_passed, 3)}</span>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <Replay />
+      {r.recent.length > 0 && (
+        <div className="border-t border-line pt-3">
+          <div className="mb-1.5 text-[12px] text-fg-3">Latest checks</div>
+          <ul className="flex flex-col">
+            {r.recent.slice(0, 15).map((x, i) => (
+              <li key={i} className="flex items-center gap-2 border-t border-line py-1.5 text-[12px] first:border-t-0" title={x.error ?? x.note ?? ''}>
+                <span className="tabular w-[96px] shrink-0 text-fg-4">{fmtTime(x.ts)}</span>
+                <span className="w-[80px] shrink-0 truncate text-fg">{x.symbol}</span>
+                <span className="w-[112px] shrink-0 truncate text-fg-2">{FILTER_LABEL[x.name as FilterName]?.name ?? x.name}</span>
+                <Pill tone={x.error ? 'warn' : x.passed ? 'ok' : x.applied ? 'danger' : 'info'} className="h-5 shrink-0 text-[10.5px]">
+                  {x.error ? 'error' : x.passed ? 'pass' : x.applied ? 'acted' : 'would act'}
+                </Pill>
+                <span className="truncate text-fg-3">{x.note}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Memory() {
-  const [tab, setTab] = useState<'lessons' | 'playbooks' | 'jev'>('lessons')
+  const [tab, setTab] = useState<'lessons' | 'playbooks' | 'jev' | 'filters'>('lessons')
   const lessons = usePoll<string[]>('/api/lessons', 20_000)
   const books = usePoll<{ name: string; description: string }[]>('/api/playbooks', 60_000)
   const [open, setOpen] = useState<string | null>(null)
@@ -332,6 +487,7 @@ function Memory() {
         tabs={[
           { id: 'lessons', label: 'Lessons', count: lessons.data?.length },
           { id: 'playbooks', label: 'Playbooks', count: books.data?.length },
+          { id: 'filters', label: 'Filters' },
           { id: 'jev', label: 'JEV' }
         ]}
         value={tab}
@@ -342,6 +498,7 @@ function Memory() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
         {tab === 'jev' && <JevPanel />}
+        {tab === 'filters' && <FiltersPanel />}
         {tab === 'lessons' &&
           (lessons.data?.length ? (
             <ul className="stagger flex flex-col gap-2">

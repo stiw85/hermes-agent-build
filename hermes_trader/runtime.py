@@ -125,7 +125,8 @@ def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
 
         engine.filters = EntryFilters(cfg["filters"], cfg["risk"], broker, cfg["timeframe"])
         vc = cfg["filters"].get("vol") or {}
-        if vc.get("enabled", True) and vc.get("iv", True):
+        # real implied vol only makes sense next to real prices (not the synthetic paper feed)
+        if vc.get("enabled", True) and vc.get("iv", True) and not engine.filters._synthetic():
             from .vol import ImpliedVol
 
             engine.filters.iv = ImpliedVol()

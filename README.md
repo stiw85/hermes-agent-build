@@ -117,6 +117,25 @@ The Brain → JEV tab shows the evidence for each check, so you can promote them
 
 OpenRouter works too: set `url: https://openrouter.ai/api/alpha/decisions`, `model: ~typesafe/jev-latest`, `api_key_env: OPENROUTER_API_KEY`.
 
+## Entry filters (price action, volatility maths, order flow)
+
+Five rule-based checks run on every **new entry**. They never touch exits. Like JEV, they start in **shadow** mode, which records what each filter would have done and changes nothing.
+
+| Filter | Idea | Fails when |
+|---|---|---|
+| `levels` | Price action: don't buy into resistance | The distance to the next key level is less than `min_rr` × the ATR stop. Key levels are daily/weekly swing highs and lows, the previous day/week high and low, and round numbers |
+| `stretch` | Black-Scholes-Merton volatility maths: don't chase | The last 24 bars moved more than ±2σ in the trade's direction |
+| `flow` | Order flow | A CVD divergence points against the trade. Needs taker volume (Binance); otherwise it passes |
+| `vol` | Volatility regime | Realised vol is more than 2× normal, or implied vol is more than 1.5× realised. Implied vol comes from Deribit DVOL for BTC/ETH and CBOE VIX for stocks. In act mode it halves the size instead of skipping |
+| `events` | Macro calendar | The entry falls within ±60 min of a listed FOMC or CPI release. The built-in list runs to 2027; keep it updated |
+
+```bash
+hermes-trader filters                                         # live shadow stats per filter
+hermes-trader filters --backtest BTC/USDT --strategy rsi_reversion   # replay history now
+```
+
+The replay runs a strategy's past entries through the filters, with no look-ahead. It shows whether the trades a filter would block did worse than the ones it keeps. When one clearly helps a strategy, set that filter's `mode: act` in `config.yaml`. The app's **Brain → Filters** tab shows the same evidence and has a Replay button. The **Markets** chart shows the nearest key levels, a ±1σ/±2σ expected-move cone for the next 24 bars, and a CVD panel when the venue has order-flow data. The LLM and JEV also receive these facts.
+
 ## Desktop app
 
 <p align="center"><img src="desktop/docs/overview.png" alt="Hermes Trader desktop: overview" width="100%"></p>
@@ -142,6 +161,8 @@ See [desktop/README.md](desktop/README.md) for connection modes (the app starts 
 | `rollback SYMBOL` | Revert to the previous strategy version |
 | `chat` / `reflect` | Talk to the agent / run a self-review |
 | `jev [--test]` | JEV calibration report / one live test call |
+| `filters [--backtest SYM --strategy S]` | Entry-filter shadow stats / replay a strategy's history through the filters |
+| `llm` | One live LLM call to check the key, URL, model and tool calling |
 | `serve [--port N] [--run]` | Local API for the desktop app (127.0.0.1 only, token auth); `--run` starts trading immediately |
 | `download SYMBOL --bars N` | Save history to CSV (`data_source: csv`) |
 

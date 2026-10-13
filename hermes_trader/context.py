@@ -159,7 +159,7 @@ def nearest_levels(levels: list[dict[str, Any]], price: float, min_gap: float = 
 def describe_level(z: dict[str, Any] | None) -> str:
     if not z:
         return "none nearby"
-    return f"{z['price']:.6g} ({', '.join(z['kinds'][:3])})"
+    return f"{z['price']:,.6g} ({', '.join(z['kinds'][:3])})"
 
 
 def price_context(df: pd.DataFrame, daily: pd.DataFrame | None, horizon_bars: int = 24,
@@ -175,6 +175,9 @@ def price_context(df: pd.DataFrame, daily: pd.DataFrame | None, horizon_bars: in
     a = float(ind.atr(df).iloc[-1]) if len(df) > 15 else float("nan")
     sup, res = nearest_levels(lv, price, a * 0.25 if math.isfinite(a) else 0.0)
     out["levels"] = [{"price": round(z["price"], 8), "kinds": z["kinds"], "strength": z["strength"]} for z in lv]
+    gap = a * 0.25 if math.isfinite(a) else 0.0
+    at = [z for z in lv if abs(z["price"] - price) <= gap]
+    out["at_level"] = describe_level(min(at, key=lambda z: abs(z["price"] - price))) if at else None
     out["nearest_support"] = describe_level(sup)
     out["nearest_resistance"] = describe_level(res)
     out["support_dist_pct"] = round((sup["price"] / price - 1) * 100, 3) if sup else None

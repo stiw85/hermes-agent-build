@@ -27,6 +27,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__
+from . import indicators as ind
 from .agent import Agent
 from .backtest import backtest, buy_and_hold
 from .brokers.base import asset_class_of
@@ -262,11 +263,14 @@ class Service:
             "ORDER BY id DESC LIMIT 300", (sym,))
         rows = [[int(ts.timestamp() * 1000), *map(float, r)] for ts, r in
                 zip(df.index, df[["open", "high", "low", "close", "volume"]].to_numpy(), strict=True)]
+        cvd_series = None
+        if ind.has_flow(df, min(len(df), 50)):
+            cvd_series = [round(float(x), 4) for x in ind.cvd(df).fillna(0.0).to_numpy()]
         jev_now = self.app.engine.journal.jev_latest_check(sym)
         if jev_now:
             jev_now = {k: jev_now.get(k) for k in ("ts", "regime", "regime_conf", "p", "mode", "applied", "error")}
         return clean({"symbol": sym, "timeframe": self.app.cfg["timeframe"], "candles": rows, "snapshot": snap,
-                      "jev": jev_now,
+                      "jev": jev_now, "cvd": cvd_series,
                       "strategy": {k: v for k, v in entry.items() if k != "history"}, "fills": fills})
 
     def equity(self, q: dict[str, str]) -> list[dict[str, Any]]:
@@ -290,6 +294,23 @@ class Service:
                  zip(r.equity.index, r.equity.to_numpy(), bh.reindex(r.equity.index).to_numpy(), strict=True)]
         return clean({"result": r.summary(), "buy_and_hold": buy_and_hold(df, cfg["timeframe"], ac),
                       "curve": downsample(curve, 800)})
+
+    def filter_replay(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Replay a strategy's past entries on a symbol through the entry filters (read-only)."""
+        from .filters import EntryFilters, evaluate_history
+
+        sym = self._symbol(body)
+        cfg = self.app.cfg
+        entry = self.app.engine.book.entry(sym)
+        strat = make(body.get("strategy") or entry["strategy"],
+                     body.get("params") if body.get("strategy") else entry.get("params"))
+        bars = max(500, min(int(body.get("bars", 3000)), 10_000))
+        with self.lock:
+            df = self.app.engine.broker.fetch_ohlcv(sym, cfg["timeframe"], bars)
+        fc = cfg["filters"]
+        f = self.app.engine.filters or EntryFilters(fc, cfg["risk"], None, cfg["timeframe"])
+        res = evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)))
+        return clean({"symbol": sym, "strategy": repr(strat), "bars": len(df), **res})
 
     def optimize(self, body: dict[str, Any]) -> dict[str, Any]:
         sym = self._symbol(body)
@@ -362,6 +383,7 @@ def make_handler(svc: Service, token: str, port_ref: list[int]) -> type[BaseHTTP
         "/api/rollback": lambda b: svc.guarded(lambda: e.book.rollback(svc._symbol(b)) or "nothing to roll back"),
         "/api/optimize": svc.optimize,
         "/api/backtest": svc.run_backtest,
+        "/api/filters/replay": svc.filter_replay,
         "/api/chat": svc.chat,
     }
 

@@ -2,7 +2,7 @@ import { IconChartCandle, IconRefresh } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { baseOption, chartTokens, EChart, valueAxis } from '../components/Chart.tsx'
 import { Chips, EmptyGlass, GlassButton, GlassCard, KeyValue, PageHeader, Pill, Section, Select } from '../components/glass.tsx'
-import { usePoll, type Candles, type Decision } from '../lib/api.ts'
+import { usePoll, type Candles, type Decision, type KeyLevel } from '../lib/api.ts'
 import { cn } from '../lib/cn.ts'
 import { fmtNum, fmtPct, fmtPrice, fmtTime } from '../lib/format.ts'
 import { useStatus } from '../lib/status.ts'
@@ -18,12 +18,28 @@ function sma(xs: number[], n: number): (number | null)[] {
   return out
 }
 
+/** Nearest few key levels on each side of price (the chart gets cluttered beyond that). */
+function nearbyLevels(c: Candles, each = 3): KeyLevel[] {
+  const ctx = c.snapshot?.context
+  const px = ctx?.price ?? c.snapshot?.last
+  if (!ctx?.levels || !px) return []
+  const above = ctx.levels.filter(z => z.price > px).sort((a, b) => a.price - b.price).slice(0, each)
+  const below = ctx.levels.filter(z => z.price <= px).sort((a, b) => b.price - a.price).slice(0, each)
+  return [...below, ...above]
+}
+
 function CandleChart({ c }: { c: Candles }) {
   const option = useMemo(() => {
     const t = chartTokens()
     const ts = c.candles.map(r => r[0])
-    const labels = ts.map(x => fmtTime(new Date(x).toISOString()))
     const closes = c.candles.map(r => r[4])
+    const ctx = c.snapshot?.context
+    const em = ctx?.expected_move
+    const step = ts.length > 1 ? ts[ts.length - 1] - ts[ts.length - 2] : 3_600_000
+    const ahead = em ? Math.round(em.bars) : 0
+    const future = Array.from({ length: ahead }, (_, i) => ts[ts.length - 1] + step * (i + 1))
+    const labels = [...ts, ...future].map(x => fmtTime(new Date(x).toISOString()))
+    const pad = (xs: (number | null)[]) => [...xs, ...Array(ahead).fill(null)]
     // a fill happens after its bar closes: attach it to the last bar that opened at or before it
     const idxFor = (iso: string) => {
       const ms = new Date(iso).getTime()
@@ -44,28 +60,64 @@ function CandleChart({ c }: { c: Candles }) {
       if (i < 0) continue
       ;(f.side === 'buy' ? buys : sells).push([i, f.price, `${f.side === 'buy' ? 'Buy' : 'Sell'} ${f.qty} @ ${fmtPrice(f.price)} (${f.strategy})`])
     }
-    const start = Math.max(0, 100 - (160 / Math.max(1, ts.length)) * 100)
+    // expected-move cone: ±1σ / ±2σ from the last close, widening with √bars (log-normal, no drift)
+    const last = closes[closes.length - 1]
+    const sBar = em ? em.sigma_pct / 100 / Math.sqrt(Math.max(em.bars, 1)) : 0
+    const cone = (k: number) =>
+      em ? [...Array(ts.length - 1).fill(null), last, ...future.map((_, i) => last * Math.exp(k * sBar * Math.sqrt(i + 1)))] : []
+    const px = ctx?.price ?? last
+    const levelLines = nearbyLevels(c).map(z => {
+      const res = z.price > px
+      const round = z.kinds.length === 1 && z.kinds[0] === 'round number'
+      return {
+        yAxis: z.price,
+        lineStyle: { color: res ? t.danger : t.ok, type: 'dashed', width: 1, opacity: round ? 0.35 : 0.7 },
+        label: { formatter: `${fmtPrice(z.price)}  ${z.kinds[0]}${z.kinds.length > 1 ? ` +${z.kinds.length - 1}` : ''}`, color: t.fg3, fontSize: 10, position: 'insideEndTop' }
+      }
+    })
+    const hasCvd = Boolean(c.cvd && c.cvd.length === ts.length)
+    const total = ts.length + ahead
+    const start = Math.max(0, 100 - (180 / Math.max(1, total)) * 100)
+    const xAxisBase = { type: 'category', data: labels, boundaryGap: true, axisLine: { lineStyle: { color: t.line } }, axisTick: { show: false } }
     return {
       ...baseOption(),
-      legend: { top: 0, left: 0, itemWidth: 14, itemHeight: 3, icon: 'rect', textStyle: { color: t.fg2 }, data: ['SMA 50', 'SMA 200', 'Buy', 'Sell'] },
-      grid: { left: 8, right: 16, top: 30, bottom: 8, containLabel: true },
+      legend: {
+        top: 0, left: 0, itemWidth: 14, itemHeight: 3, icon: 'rect', textStyle: { color: t.fg2 },
+        data: ['SMA 50', 'SMA 200', 'Buy', 'Sell', ...(em ? ['±1σ', '±2σ'] : []), ...(hasCvd ? ['CVD'] : [])]
+      },
+      grid: hasCvd
+        ? [{ left: 8, right: 16, top: 30, bottom: '27%', containLabel: true }, { left: 8, right: 16, top: '77%', bottom: 8, containLabel: true }]
+        : { left: 8, right: 16, top: 30, bottom: 8, containLabel: true },
       tooltip: {
         ...(baseOption().tooltip as object),
         valueFormatter: (v: number) => (typeof v === 'number' ? fmtPrice(v) : String(v))
       },
-      xAxis: { type: 'category', data: labels, boundaryGap: true, axisLine: { lineStyle: { color: t.line } }, axisTick: { show: false }, axisLabel: { color: t.fg3, hideOverlap: true } },
-      yAxis: valueAxis(v => fmtPrice(v)),
-      dataZoom: [{ type: 'inside', start, end: 100, minValueSpan: 20 }],
+      xAxis: hasCvd
+        ? [{ ...xAxisBase, axisLabel: { show: false } }, { ...xAxisBase, gridIndex: 1, axisLabel: { color: t.fg3, hideOverlap: true } }]
+        : { ...xAxisBase, axisLabel: { color: t.fg3, hideOverlap: true } },
+      yAxis: hasCvd
+        ? [valueAxis(v => fmtPrice(v)), { ...valueAxis(v => fmtNum(v, 0)), gridIndex: 1, splitNumber: 2 }]
+        : valueAxis(v => fmtPrice(v)),
+      dataZoom: [{ type: 'inside', start, end: 100, minValueSpan: 20, xAxisIndex: hasCvd ? [0, 1] : [0] }],
       series: [
         {
           name: c.symbol,
           type: 'candlestick',
-          data: c.candles.map(r => [r[1], r[4], r[3], r[2]]),
+          data: [...c.candles.map(r => [r[1], r[4], r[3], r[2]]), ...Array(ahead).fill('-')],
           itemStyle: { color: t.ok, color0: t.danger, borderColor: t.ok, borderColor0: t.danger, borderWidth: 1 },
-          barMaxWidth: 10
+          barMaxWidth: 10,
+          markLine: levelLines.length ? { symbol: 'none', silent: true, data: levelLines, animation: false } : undefined
         },
-        { name: 'SMA 50', type: 'line', data: sma(closes, 50), showSymbol: false, lineStyle: { width: 2, color: t.s1 }, itemStyle: { color: t.s1 } },
-        { name: 'SMA 200', type: 'line', data: sma(closes, 200), showSymbol: false, lineStyle: { width: 2, color: t.s2 }, itemStyle: { color: t.s2 } },
+        { name: 'SMA 50', type: 'line', data: pad(sma(closes, 50)), showSymbol: false, lineStyle: { width: 2, color: t.s1 }, itemStyle: { color: t.s1 } },
+        { name: 'SMA 200', type: 'line', data: pad(sma(closes, 200)), showSymbol: false, lineStyle: { width: 2, color: t.s2 }, itemStyle: { color: t.s2 } },
+        ...(em
+          ? [
+              { name: '±1σ', type: 'line', data: cone(1), showSymbol: false, connectNulls: false, lineStyle: { width: 1.5, type: 'dashed', color: t.fg2 }, itemStyle: { color: t.fg2 } },
+              { name: '±1σ', type: 'line', data: cone(-1), showSymbol: false, lineStyle: { width: 1.5, type: 'dashed', color: t.fg2 }, itemStyle: { color: t.fg2 } },
+              { name: '±2σ', type: 'line', data: cone(2), showSymbol: false, lineStyle: { width: 1, type: 'dotted', color: t.fg3 }, itemStyle: { color: t.fg3 } },
+              { name: '±2σ', type: 'line', data: cone(-2), showSymbol: false, lineStyle: { width: 1, type: 'dotted', color: t.fg3 }, itemStyle: { color: t.fg3 } }
+            ]
+          : []),
         {
           name: 'Buy',
           type: 'scatter',
@@ -84,11 +136,62 @@ function CandleChart({ c }: { c: Candles }) {
           itemStyle: { color: t.danger, borderColor: t.surface, borderWidth: 2 },
           data: sells.map(b => ({ value: [b[0], b[1]], tip: b[2] })),
           tooltip: { trigger: 'item', formatter: (p: { data: { tip: string } }) => p.data.tip }
-        }
+        },
+        ...(hasCvd
+          ? [{ name: 'CVD', type: 'line', xAxisIndex: 1, yAxisIndex: 1, data: pad(c.cvd as number[]), showSymbol: false, lineStyle: { width: 1.5, color: t.s2 }, itemStyle: { color: t.s2 }, areaStyle: { color: t.s2, opacity: 0.08 } }]
+          : [])
       ]
     }
   }, [c])
-  return <EChart option={option} height="100%" className="min-h-[360px]" ariaLabel={`${c.symbol} ${c.timeframe} candlestick chart with SMA 50 and SMA 200 and the bot's fills`} />
+  return (
+    <EChart
+      option={option}
+      height="100%"
+      className="min-h-[360px]"
+      ariaLabel={`${c.symbol} ${c.timeframe} candlestick chart with SMA 50 and SMA 200, nearby key levels, the expected-move cone for the next bars${c.cvd ? ', cumulative volume delta' : ''} and the bot's fills`}
+    />
+  )
+}
+
+function ContextCard({ c }: { c: Candles }) {
+  const ctx = c.snapshot?.context
+  if (!ctx || ctx.error) return null
+  const em = ctx.expected_move
+  const z = ctx.stretch_z_24
+  const pct = (v: number | null | undefined) => (v == null ? '' : ` (${v > 0 ? '+' : ''}${v.toFixed(2)}%)`)
+  const touch = (k: string) => {
+    const v = Object.entries(ctx).find(([key]) => key.startsWith(`p_touch_${k}`))?.[1]
+    return typeof v === 'number' ? ` · ${Math.round(v * 100)}% touch` : ''
+  }
+  const flow = ctx.order_flow
+  return (
+    <GlassCard className="p-4">
+      <Section title="Levels & volatility">
+        <KeyValue
+          labelWidth={92}
+          rows={[
+            ...(ctx.at_level ? [{ label: 'At level', value: <span className="text-[12px] text-warn">{ctx.at_level}</span> }] : []),
+            { label: 'Resistance', value: <span className="text-[12px]" title={`${ctx.nearest_resistance ?? ''}${touch('resistance')}`}>{(ctx.nearest_resistance ?? '—') + pct(ctx.resistance_dist_pct)}</span> },
+            { label: 'Support', value: <span className="text-[12px]" title={`${ctx.nearest_support ?? ''}${touch('support')}`}>{(ctx.nearest_support ?? '—') + pct(ctx.support_dist_pct)}</span> },
+            ...(em ? [{ label: `Next ${em.bars} bars`, value: `±${em.sigma_pct.toFixed(2)}% typical (1σ)` }] : []),
+            ...(z != null ? [{ label: 'Last 24 bars', value: <span className={cn(Math.abs(z) > 2 ? 'text-warn' : '')}>{`${z > 0 ? '+' : ''}${z.toFixed(1)}σ move${Math.abs(z) > 2 ? ' (stretched)' : ''}`}</span> }] : [])
+          ]}
+        />
+      </Section>
+      {flow && (
+        <Section title="Order flow" className="mt-3">
+          <KeyValue
+            labelWidth={92}
+            rows={[
+              { label: 'Net aggression', value: <span className={cn(flow.net_aggression_24b > 0 ? 'text-ok' : flow.net_aggression_24b < 0 ? 'text-danger' : '')}>{`${flow.net_aggression_24b > 0 ? '+' : ''}${Math.round(flow.net_aggression_24b * 100)}% (24 bars)`}</span> },
+              { label: 'CVD divergence', value: <span className="text-[12px]">{flow.cvd_divergence}</span> },
+              { label: 'Last bar', value: <span className="text-[12px]">{flow.last_bar}</span> }
+            ]}
+          />
+        </Section>
+      )}
+    </GlassCard>
+  )
 }
 
 export function MarketsPage() {
@@ -154,6 +257,7 @@ export function MarketsPage() {
               )}
             </Section>
           </GlassCard>
+          {c && <ContextCard c={c} />}
           <GlassCard className="p-4">
             <Section title="Trading it with">
               {c ? (

@@ -200,6 +200,26 @@ export interface StrategyDef {
   grid: Record<string, number[]>
 }
 
+export interface KeyLevel {
+  price: number
+  kinds: string[]
+  strength: number
+}
+
+export interface PriceContext {
+  price: number
+  expected_move?: { bars: number; sigma_pct: number; band_1s: [number, number]; band_2s: [number, number] }
+  stretch_z_24?: number | null
+  levels?: KeyLevel[]
+  at_level?: string | null
+  nearest_support?: string
+  nearest_resistance?: string
+  support_dist_pct?: number | null
+  resistance_dist_pct?: number | null
+  order_flow?: { net_aggression_24b: number; net_aggression_last_bar: number; cvd_divergence: string; last_bar: string }
+  [k: string]: unknown
+}
+
 export interface Snapshot {
   last: number
   bar_time: string
@@ -211,6 +231,7 @@ export interface Snapshot {
   atr_pct: number | null
   trend_sma50_200: string
   range_100: [number, number]
+  context?: PriceContext
 }
 
 export interface Candles {
@@ -221,6 +242,46 @@ export interface Candles {
   strategy: BookEntry
   fills: { ts: string; side: 'buy' | 'sell'; qty: number; price: number; strategy: string; realized_pnl: number | null }[]
   jev?: { ts: string; regime: string | null; regime_conf: number | null; p: number | null; mode: string; applied: number; error: string | null } | null
+  /** cumulative volume delta per candle; null when the venue has no taker volume */
+  cvd?: number[] | null
+}
+
+export type FilterName = 'levels' | 'stretch' | 'flow' | 'vol' | 'events'
+
+export interface FilterStats {
+  enabled: boolean
+  mode: 'shadow' | 'act'
+  checks: number
+  would_block: number
+  applied: number
+  scored: number
+  avg_fwd_pct_blocked: number | null
+  avg_fwd_pct_passed: number | null
+  recommendation: string
+}
+
+export interface FilterReport {
+  enabled: boolean
+  mode: 'shadow' | 'act'
+  horizon_bars: number
+  filters: Record<FilterName, FilterStats>
+  recent: { ts: string; symbol: string; strategy: string; name: string; side_sign: number; passed: number; applied: number; mode: string; value: number | null; note: string | null; fwd_ret: number | null; resolved_ts: string | null; error: string | null }[]
+}
+
+export interface ReplayGroup {
+  n: number
+  avg_trade_pct: number | null
+  win_rate: number | null
+  avg_fwd_pct: number | null
+}
+
+export interface FilterReplay {
+  symbol: string
+  strategy: string
+  bars: number
+  entries: number
+  horizon_bars: number
+  filters: Record<FilterName, { blocked: ReplayGroup; passed: ReplayGroup; pnl_if_acting_pct: number; pnl_without_pct: number; verdict: string }>
 }
 
 export interface Stats {
@@ -269,6 +330,7 @@ export interface ConfigView {
   schedule: Record<string, unknown>
   broker: Record<string, unknown>
   llm: Record<string, unknown>
+  filters?: { enabled: boolean; mode: string } & Record<string, unknown>
   home: string
   config_path: string | null
 }

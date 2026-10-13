@@ -264,3 +264,24 @@ def test_agent_cannot_call_tools_it_was_not_offered(tmp_path):
     agent.run("hi", tools=["journal_stats"])
     tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
     assert "not available here" in tool_msgs[0]["content"]
+
+
+def test_filters_endpoints_and_cvd(tmp_path):
+    """GET /api/filters, POST /api/filters/replay, candles carry CVD + price context."""
+    from hermes_trader.config import load_config
+    from hermes_trader.runtime import build
+    from hermes_trader.server import Service
+
+    cfg = load_config(overrides={"home": str(tmp_path / "h")})
+    app = build(cfg)
+    svc = Service(app)
+    app.engine.cycle()
+    rep = svc.filters({})
+    assert rep["enabled"] and set(rep["filters"]) == {"levels", "stretch", "flow", "vol", "events"}
+    sym = app.engine.symbols[0]
+    out = svc.filter_replay({"symbol": sym, "strategy": "sma_cross", "bars": 1500})
+    assert out["entries"] > 0 and "levels" in out["filters"]
+    c = svc.candles({"symbol": sym, "bars": "200"})
+    assert c["cvd"] and len(c["cvd"]) == len(c["candles"])
+    ctx = c["snapshot"]["context"]
+    assert "expected_move" in ctx and "levels" in ctx and "order_flow" in ctx

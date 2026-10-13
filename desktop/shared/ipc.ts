@@ -53,5 +53,5 @@ export const API_GET = [
 ] as const
 export const API_POST = [
   '/api/bot/start', '/api/bot/stop', '/api/cycle', '/api/halt', '/api/resume', '/api/flatten', '/api/rollback',
-  '/api/optimize', '/api/backtest', '/api/chat'
+  '/api/optimize', '/api/backtest', '/api/filters/replay', '/api/chat'
 ] as const

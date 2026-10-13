@@ -40,6 +40,18 @@ function ConfigCard() {
               { label: 'Short selling', value: c.allow_short ? 'Allowed' : 'Off' },
               { label: 'Default strategy', value: c.default_strategy.name },
               { label: 'LLM', value: c.llm.enabled ? `${String(c.llm.model)} @ ${String(c.llm.base_url)}` : 'Off' },
+              {
+                label: 'Entry filters',
+                value: !c.filters?.enabled
+                  ? 'Off'
+                  : `${c.filters.mode} · ${(['levels', 'stretch', 'flow', 'vol', 'events'] as const)
+                      .filter(n => (c.filters?.[n] as { enabled?: boolean } | undefined)?.enabled !== false)
+                      .map(n => {
+                        const m = (c.filters?.[n] as { mode?: string } | undefined)?.mode
+                        return m && m !== c.filters?.mode ? `${n} (${m})` : n
+                      })
+                      .join(', ')}`
+              },
               { label: 'Data folder', value: <span className="font-mono text-[11.5px]">{c.home}</span> }
             ]}
           />
