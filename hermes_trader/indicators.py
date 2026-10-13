@@ -49,3 +49,28 @@ def donchian(df: pd.DataFrame, n: int = 20) -> tuple[pd.Series, pd.Series]:
 def macd(s: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[pd.Series, pd.Series]:
     line = ema(s, fast) - ema(s, slow)
     return line, ema(line, signal)
+
+
+def swing(df: pd.DataFrame, n: int = 55) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Swing range of the *previous* n bars: (low, high, up_leg).
+
+    up_leg is True when the swing high came after the swing low (an up-move being retraced),
+    False when the low came last (a down-move). Uses bars t-n..t-1 only, like donchian().
+    """
+    hi = df["high"].to_numpy(dtype=float)
+    lo = df["low"].to_numpy(dtype=float)
+    out_lo = np.full(len(df), np.nan)
+    out_hi = np.full(len(df), np.nan)
+    out_up = np.full(len(df), np.nan)
+    if len(df) > n:
+        from numpy.lib.stride_tricks import sliding_window_view
+
+        wh, wl = sliding_window_view(hi, n)[:-1], sliding_window_view(lo, n)[:-1]  # windows ending at t-1
+        # last occurrence of the extreme, so a re-test counts as the most recent swing point
+        ih = n - 1 - np.argmax(wh[:, ::-1], axis=1)
+        il = n - 1 - np.argmin(wl[:, ::-1], axis=1)
+        out_hi[n:] = wh.max(axis=1)
+        out_lo[n:] = wl.min(axis=1)
+        out_up[n:] = (ih > il).astype(float)
+    idx = df.index
+    return pd.Series(out_lo, idx), pd.Series(out_hi, idx), pd.Series(out_up, idx)

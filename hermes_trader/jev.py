@@ -49,6 +49,7 @@ STRATEGY_STYLE = {
     "rsi_reversion": "mean reversion (buy oversold / sell overbought RSI)",
     "bollinger_reversion": "mean reversion (fade moves outside Bollinger bands)",
     "trend_rsi": "buy-the-dip inside an uptrend",
+    "fib_retracement": "pullback (buy a Fibonacci retracement of the last swing, or sell one in a down-swing)",
 }
 
 

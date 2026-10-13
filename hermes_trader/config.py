@@ -90,7 +90,8 @@ DEFAULTS: dict[str, Any] = {
         "min_improvement": 0.10,  # OOS score must beat incumbent by this (absolute Sharpe)
         "max_drawdown": 0.25,  # reject candidates with OOS DD above this
         "max_candidates": 60,
-        "strategies": ["sma_cross", "ema_cross", "rsi_reversion", "donchian_breakout", "bollinger_reversion"],
+        "strategies": ["sma_cross", "ema_cross", "rsi_reversion", "donchian_breakout", "bollinger_reversion",
+                       "trend_rsi", "fib_retracement"],
         "reflect_after_trades": 10,
         "promote_cooldown_hours": 24,  # agent-requested promotions per symbol
     },

@@ -106,4 +106,36 @@ class TrendFilteredRSI(Strategy):
         return latch(up & (r < self.params["lower"]), (r > self.params["exit"]) | ~up, df.index, 1.0)
 
 
-BUILTINS: list[type[Strategy]] = [SMACross, EMACross, RSIReversion, DonchianBreakout, BollingerReversion, TrendFilteredRSI]
+class FibRetracement(Strategy):
+    name = "fib_retracement"
+    description = ("Pullback: in an up-swing, buy when price dips to a Fibonacci retracement (38.2/50/61.8%) "
+                   "and closes back above it; exit beyond the invalidation level (78.6%/100%) or at the swing "
+                   "high / 127.2% extension. Mirror for shorts.")
+    defaults = {"lookback": 55, "level": 0.618, "stop": 0.786, "target": 1.0, "min_range_atr": 3.0}
+    grid = {"lookback": [34, 55, 89, 144], "level": [0.382, 0.5, 0.618], "stop": [0.786, 1.0], "target": [1.0, 1.272]}
+
+    @classmethod
+    def valid(cls, p: dict[str, Any]) -> bool:
+        return p["lookback"] >= 5 and 0 < p["level"] < p["stop"] <= 1.0 and p["target"] >= 1.0 and p["min_range_atr"] >= 0
+
+    def warmup(self) -> int:
+        return max(self.params["lookback"], 14) + 2
+
+    def targets(self, df: pd.DataFrame) -> pd.Series:
+        p = self.params
+        lo, hi, up = ind.swing(df, p["lookback"])
+        rng = hi - lo
+        big = rng >= p["min_range_atr"] * ind.atr(df).shift(1)  # ignore swings too small to be meaningful
+        c, h, l_ = df["close"], df["high"], df["low"]
+        upleg, downleg = (up == 1.0) & big, (up == 0.0) & big
+        # up-leg: levels measured down from the swing high
+        buy_lvl, buy_stop, buy_tp = hi - p["level"] * rng, hi - p["stop"] * rng, lo + p["target"] * rng
+        long_ = latch(upleg & (l_ <= buy_lvl) & (c > buy_lvl), (c < buy_stop) | (c >= buy_tp), df.index, 1.0)
+        # down-leg: levels measured up from the swing low
+        sell_lvl, sell_stop, sell_tp = lo + p["level"] * rng, lo + p["stop"] * rng, hi - p["target"] * rng
+        short = latch(downleg & (h >= sell_lvl) & (c < sell_lvl), (c > sell_stop) | (c <= sell_tp), df.index, -1.0)
+        return (long_ + short).clip(-1, 1)
+
+
+BUILTINS: list[type[Strategy]] = [SMACross, EMACross, RSIReversion, DonchianBreakout, BollingerReversion, TrendFilteredRSI,
+                                  FibRetracement]

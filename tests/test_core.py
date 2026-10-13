@@ -197,3 +197,51 @@ def test_config_rejects_env_lines_without_echoing_secret(tmp_path):
     p.write_text("llm:\n  enabled: true\n model: x\n")  # bad indent
     with pytest.raises(ConfigError, match="line 3"):
         load_config(p)
+
+
+def _bars(closes, lows=None, highs=None):
+    c = np.asarray(closes, dtype=float)
+    lo = c - 0.5 if lows is None else np.asarray(lows, dtype=float)
+    hi = c + 0.5 if highs is None else np.asarray(highs, dtype=float)
+    idx = pd.date_range("2026-01-01", periods=len(c), freq="h", tz="UTC")
+    return pd.DataFrame({"open": c, "high": hi, "low": lo, "close": c, "volume": 1.0}, index=idx)
+
+
+def _fib_path(after):
+    """60 flat bars at 100, rally to 200, pull back to the 61.8% level, then `after`."""
+    closes = [100.0] * 60 + list(np.linspace(100, 200, 40)) + list(np.linspace(196, 145, 10))
+    entry = len(closes)
+    closes += [139.0] + list(after)
+    lows = [c - 0.5 for c in closes]
+    lows[entry] = 137.0  # dips through the 61.8% retracement (~138.1) and closes back above it
+    return _bars(closes, lows=lows), entry
+
+
+def test_swing_indicator():
+    df, entry = _fib_path([150.0])
+    lo, hi, up = ind.swing(df, 89)
+    assert lo.iloc[:89].isna().all()
+    assert lo.iloc[entry] == pytest.approx(99.5) and hi.iloc[entry] == pytest.approx(200.5)
+    assert up.iloc[entry] == 1.0  # the high came after the low: an up-swing being retraced
+
+
+def test_fib_retracement_long_entry_target_and_stop():
+    s = make("fib_retracement", {"lookback": 89, "level": 0.618, "stop": 0.786, "target": 1.0})
+    df, entry = _fib_path(list(np.linspace(145, 199, 8)) + [201.0, 201.0])
+    t = s.targets(df)
+    assert (t.iloc[:entry] == 0).all()
+    assert t.iloc[entry] == 1.0  # bought the bounce off 61.8%
+    assert (t.iloc[entry:-2] == 1.0).all()
+    assert t.iloc[-2] == 0.0  # closed back at the prior swing high
+    df2, entry2 = _fib_path([130.0, 120.0, 118.0])  # breaks 78.6% (~121.1): the swing is invalid
+    t2 = s.targets(df2)
+    assert t2.iloc[entry2] == 1.0 and t2.iloc[entry2 + 1] == 1.0 and t2.iloc[entry2 + 2] == 0.0
+
+
+def test_fib_retracement_shorts_mirror_longs_and_small_swings_ignored():
+    s = make("fib_retracement", {"lookback": 89})
+    df, _ = _fib_path(list(np.linspace(145, 199, 8)) + [201.0, 201.0])
+    flipped = _bars(400 - df["close"], lows=400 - df["high"], highs=400 - df["low"])
+    pd.testing.assert_series_equal(s.targets(flipped), -s.targets(df), check_names=False)
+    picky = make("fib_retracement", {"lookback": 89, "min_range_atr": 500.0})
+    assert (picky.targets(df) == 0).all()
