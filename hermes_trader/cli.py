@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .config import load_config
+from .config import ConfigError, load_config
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 
@@ -120,7 +120,11 @@ def main(argv: list[str] | None = None) -> int:
 
     from .runtime import build  # heavy imports after arg parsing
 
-    cfg = load_config(a.config)
+    try:
+        cfg = load_config(a.config)
+    except ConfigError as err:
+        print(f"❌ {err}", file=sys.stderr)
+        return 2
     if a.cmd == "llm":
         return cmd_llm(cfg)
     interactive = a.cmd == "chat"

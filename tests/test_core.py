@@ -183,3 +183,17 @@ def test_stop_hit():
     assert not rm.stop_hit(1, 100, 81, 10)
     assert rm.stop_hit(-1, 100, 121, 10)
     assert not rm.stop_hit(0, 100, 50, 10)
+
+
+def test_config_rejects_env_lines_without_echoing_secret(tmp_path):
+    from hermes_trader.config import ConfigError, load_config
+
+    p = tmp_path / "config.yaml"
+    p.write_text("mode: paper\nLLM_API_KEY=sk-ant-SECRET123\nllm:\n  enabled: true\n")
+    with pytest.raises(ConfigError) as e:
+        load_config(p)
+    msg = str(e.value)
+    assert "line 2 (LLM_API_KEY=...)" in msg and ".env" in msg and "SECRET" not in msg
+    p.write_text("llm:\n  enabled: true\n model: x\n")  # bad indent
+    with pytest.raises(ConfigError, match="line 3"):
+        load_config(p)

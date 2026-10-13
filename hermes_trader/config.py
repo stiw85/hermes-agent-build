@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -196,6 +197,35 @@ class Config:
         return os.environ.get(env_name) or None
 
 
+class ConfigError(ValueError):
+    """config.yaml can't be used. The message never echoes file contents (they may hold a pasted secret)."""
+
+
+_ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=")
+
+
+def read_yaml_config(p: Path) -> dict[str, Any]:
+    text = p.read_text(encoding="utf-8-sig")
+    env_lines = [(i + 1, m.group(1)) for i, line in enumerate(text.splitlines()) if (m := _ENV_LINE.match(line))]
+    if env_lines:
+        where = ", ".join(f"line {n} ({name}=...)" for n, name in env_lines)
+        raise ConfigError(
+            f"{p} has .env-style lines: {where}. Keys and secrets go in {p.parent / '.env'}, not config.yaml. "
+            f"Move those lines to .env and delete them from config.yaml (config.yaml only names the variable, "
+            f"e.g. `api_key_env: LLM_API_KEY`).")
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        at = f" at line {mark.line + 1}, column {mark.column + 1}" if mark else ""
+        problem = getattr(e, "problem", None) or "invalid YAML"
+        raise ConfigError(f"{p}: {problem}{at}. Check indentation (spaces, not tabs) and that every setting "
+                          f"looks like `name: value`.") from None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{p}: expected `name: value` settings at the top level.")
+    return data
+
+
 def load_config(path: str | Path | None = None, overrides: dict | None = None) -> Config:
     load_dotenv()  # ./.env
     raw = copy.deepcopy(DEFAULTS)
@@ -205,7 +235,7 @@ def load_config(path: str | Path | None = None, overrides: dict | None = None) -
         if c and Path(c).is_file():
             cfg_path = Path(c).resolve()
             load_dotenv(cfg_path.parent / ".env")  # .env next to config.yaml, wherever you run from
-            raw = _deep_merge(raw, yaml.safe_load(cfg_path.read_text()) or {})
+            raw = _deep_merge(raw, read_yaml_config(cfg_path))
             break
     else:
         if path:
