@@ -105,7 +105,7 @@ improve:
   min_improvement: 0.10
   max_drawdown: 0.25
   max_candidates: 60
-  strategies: [sma_cross, ema_cross, rsi_reversion, donchian_breakout, bollinger_reversion, trend_rsi, fib_retracement]
+  strategies: [sma_cross, ema_cross, rsi_reversion, donchian_breakout, bollinger_reversion, trend_rsi, fib_retracement, market_structure]
   reflect_after_trades: 10
   promote_cooldown_hours: 24   # max one agent-requested promotion per symbol per window
 

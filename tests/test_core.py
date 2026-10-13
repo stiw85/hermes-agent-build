@@ -245,3 +245,44 @@ def test_fib_retracement_shorts_mirror_longs_and_small_swings_ignored():
     pd.testing.assert_series_equal(s.targets(flipped), -s.targets(df), check_names=False)
     picky = make("fib_retracement", {"lookback": 89, "min_range_atr": 500.0})
     assert (picky.targets(df) == 0).all()
+
+
+def _structure_path(retest_close=111.0, after=(113, 115, 117, 115, 113, 109, 106, 102)):
+    """Swing high 110 (pivot), pullback low ~103, break above 110, retest of 110, then trend/exit."""
+    closes = [100.0] * 30 + [100, 102, 104, 106, 108, 110, 108, 106, 104, 105, 107, 109, 111.5, 113, 112]
+    retest = len(closes)
+    closes += [retest_close] + list(after)
+    lows = [c - 0.5 for c in closes]
+    lows[retest] = 110.3  # dips back to the broken 110.5 swing high
+    return _bars(closes, lows=lows), retest
+
+
+def test_market_structure_break_retest_and_trailing_exit():
+    s = make("market_structure", {"pivot": 2, "retest_bars": 12, "tol": 0.5, "trend": 0})
+    df, retest = _structure_path()
+    t = s.targets(df)
+    brk = 30 + 12  # the 111.5 close breaks the 110.5 swing high
+    assert (t.iloc[: retest] == 0).all(), "no entry on the breakout bar itself, only on the retest"
+    assert t.iloc[retest] == 1.0
+    held = t.iloc[retest:]
+    assert (held.iloc[:5] == 1.0).all() and held.iloc[-1] == 0.0  # trailing swing stop closes it later
+    assert brk < retest
+
+
+def test_market_structure_failed_breakout_and_trend_requirement():
+    s = make("market_structure", {"pivot": 2, "retest_bars": 12, "tol": 0.5, "trend": 0})
+    df, retest = _structure_path(retest_close=108.0, after=(107, 106, 105, 104, 103, 104, 103))
+    assert (s.targets(df) == 0).all()  # fell back below the broken level: the breakout failed, no entry
+    strict = make("market_structure", {"pivot": 2, "retest_bars": 12, "tol": 0.5, "trend": 1})
+    df2, retest = _structure_path()
+    t2 = strict.targets(df2)
+    assert t2.iloc[retest] == 0  # first break: only one swing low so far, no higher low -> skipped
+    first = int(np.argmax(t2.to_numpy() != 0))
+    assert first > retest + 3 and t2.iloc[first] == 1.0  # later break after a higher low formed -> taken
+
+
+def test_market_structure_shorts_mirror_longs():
+    s = make("market_structure", {"pivot": 2, "retest_bars": 12, "tol": 0.5, "trend": 0})
+    df, _ = _structure_path()
+    flipped = _bars(400 - df["close"], lows=400 - df["high"], highs=400 - df["low"])
+    pd.testing.assert_series_equal(s.targets(flipped), -s.targets(df), check_names=False)

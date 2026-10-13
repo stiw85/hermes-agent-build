@@ -147,7 +147,7 @@ See [desktop/README.md](desktop/README.md) for connection modes (the app starts 
 
 ## Strategies
 
-`sma_cross`, `ema_cross`, `donchian_breakout` (trend); `rsi_reversion`, `bollinger_reversion`, `trend_rsi` (mean reversion); `fib_retracement` (pullback). `fib_retracement` buys a dip to a Fibonacci retracement (38.2%, 50% or 61.8%) of the last swing and exits if price breaks 78.6% or 100%, or reaches the swing high or the 127.2% extension. Shorts mirror this. To add your own, subclass `Strategy`, implement `targets(df)` returning exposure in [-1, 1], and `register()` it. The no-look-ahead test runs automatically over every registered strategy.
+`sma_cross`, `ema_cross`, `donchian_breakout` (trend); `rsi_reversion`, `bollinger_reversion`, `trend_rsi` (mean reversion); `fib_retracement` (pullback); `market_structure` (price action: buy the retest after a break of structure, exit when structure breaks). `fib_retracement` buys a dip to a Fibonacci retracement (38.2%, 50% or 61.8%) of the last swing and exits if price breaks 78.6% or 100%, or reaches the swing high or the 127.2% extension. Shorts mirror this. To add your own, subclass `Strategy`, implement `targets(df)` returning exposure in [-1, 1], and `register()` it. The no-look-ahead test runs automatically over every registered strategy.
 
 ## Layout
 

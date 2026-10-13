@@ -90,10 +90,10 @@ def pivots(df: pd.DataFrame, k: int) -> tuple[list[float], list[float]]:
     """
     h, lo = df["high"].to_numpy(float), df["low"].to_numpy(float)
     highs, lows = [], []
-    for i in range(k, len(df) - k):
-        if h[i] >= h[i - k: i + k + 1].max():
+    for i in range(k, len(df) - k):  # strictly beyond the k bars before, at least level with the k after
+        if h[i] > h[i - k: i].max() and h[i] >= h[i + 1: i + k + 1].max():
             highs.append(float(h[i]))
-        if lo[i] <= lo[i - k: i + k + 1].min():
+        if lo[i] < lo[i - k: i].min() and lo[i] <= lo[i + 1: i + k + 1].min():
             lows.append(float(lo[i]))
     return highs, lows
 

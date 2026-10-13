@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .. import indicators as ind
@@ -137,5 +138,69 @@ class FibRetracement(Strategy):
         return (long_ + short).clip(-1, 1)
 
 
+class MarketStructure(Strategy):
+    name = "market_structure"
+    description = ("Price action: confirmed swing highs/lows define structure. After a break of structure (close "
+                   "above the last swing high), buy the retest of the broken level once it holds; exit when price "
+                   "closes below the latest swing low (trailing). Mirror for shorts. trend=1 also requires a higher "
+                   "low (lower high for shorts) before the break.")
+    defaults = {"pivot": 3, "retest_bars": 12, "tol": 0.5, "trend": 1}
+    grid = {"pivot": [2, 3, 5], "retest_bars": [6, 12, 24], "tol": [0.25, 0.5], "trend": [0, 1]}
+
+    @classmethod
+    def valid(cls, p: dict[str, Any]) -> bool:
+        return p["pivot"] >= 1 and p["retest_bars"] >= 1 and p["tol"] > 0 and p["trend"] in (0, 1)
+
+    def warmup(self) -> int:
+        return max(30, 4 * self.params["pivot"] + 2)
+
+    def targets(self, df: pd.DataFrame) -> pd.Series:
+        k, rb, tol, need_trend = (self.params["pivot"], self.params["retest_bars"], self.params["tol"],
+                                  bool(self.params["trend"]))
+        h, lo, c = df["high"].to_numpy(float), df["low"].to_numpy(float), df["close"].to_numpy(float)
+        atr = ind.atr(df).to_numpy(float)
+        n = len(df)
+        out = np.zeros(n)
+        nan = float("nan")
+        last_ph = prev_ph = last_pl = prev_pl = nan
+        arm_long = arm_short = None  # (level, last bar the retest may happen)
+        pos = 0
+        for t in range(n):
+            i = t - k  # a pivot at bar i is confirmed once bar t = i + k has closed
+            if i >= k:  # strictly beyond the k bars before it, at least level with the k after (no flat runs)
+                if h[i] > h[i - k: i].max() and h[i] >= h[i + 1: t + 1].max():
+                    prev_ph, last_ph = last_ph, h[i]
+                if lo[i] < lo[i - k: i].min() and lo[i] <= lo[i + 1: t + 1].min():
+                    prev_pl, last_pl = last_pl, lo[i]
+            a = atr[t] if np.isfinite(atr[t]) else 0.0
+            # exits: structure broken against the position (trailing swing stop)
+            if pos > 0 and np.isfinite(last_pl) and c[t] < last_pl:
+                pos = 0
+            elif pos < 0 and np.isfinite(last_ph) and c[t] > last_ph:
+                pos = 0
+            # breaks of structure arm a retest entry
+            if t > 0 and np.isfinite(last_ph) and c[t] > last_ph >= c[t - 1]:
+                if not need_trend or (np.isfinite(prev_pl) and last_pl > prev_pl):
+                    arm_long, arm_short = (last_ph, t + rb), None
+            if t > 0 and np.isfinite(last_pl) and c[t] < last_pl <= c[t - 1]:
+                if not need_trend or (np.isfinite(prev_ph) and last_ph < prev_ph):
+                    arm_short, arm_long = (last_pl, t + rb), None
+            # retest: price comes back to the broken level and closes on the right side of it
+            if arm_long and a:
+                lvl, until = arm_long
+                if t > until or c[t] < lvl - tol * a:
+                    arm_long = None  # no retest in time, or the breakout failed
+                elif pos <= 0 and lo[t] <= lvl + tol * a and c[t] > lvl and not (c[t] > lvl >= c[t - 1]):
+                    pos, arm_long = 1, None
+            if arm_short and a:
+                lvl, until = arm_short
+                if t > until or c[t] > lvl + tol * a:
+                    arm_short = None
+                elif pos >= 0 and h[t] >= lvl - tol * a and c[t] < lvl and not (c[t] < lvl <= c[t - 1]):
+                    pos, arm_short = -1, None
+            out[t] = pos
+        return pd.Series(out, index=df.index)
+
+
 BUILTINS: list[type[Strategy]] = [SMACross, EMACross, RSIReversion, DonchianBreakout, BollingerReversion, TrendFilteredRSI,
-                                  FibRetracement]
+                                  FibRetracement, MarketStructure]

@@ -99,7 +99,7 @@ DEFAULTS: dict[str, Any] = {
         "max_drawdown": 0.25,  # reject candidates with OOS DD above this
         "max_candidates": 60,
         "strategies": ["sma_cross", "ema_cross", "rsi_reversion", "donchian_breakout", "bollinger_reversion",
-                       "trend_rsi", "fib_retracement"],
+                       "trend_rsi", "fib_retracement", "market_structure"],
         "reflect_after_trades": 10,
         "promote_cooldown_hours": 24,  # agent-requested promotions per symbol
     },
