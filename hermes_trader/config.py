@@ -51,11 +51,13 @@ DEFAULTS: dict[str, Any] = {
     },
     "llm": {
         "enabled": False,
+        "provider": "auto",  # auto | openai (any /chat/completions endpoint) | anthropic (native Claude API)
         "base_url": "https://openrouter.ai/api/v1",  # any OpenAI-compatible endpoint
         "model": "nousresearch/hermes-4-70b",
         "api_key_env": "LLM_API_KEY",
         "temperature": 0.2,
         "timeout": 60,
+        "max_tokens": 4096,  # anthropic only (required by its API)
         "trade_review": True,  # LLM may veto/shrink (never enlarge) proposed trades
         "on_review_error": "reduce",  # reduce (x0.5) | veto | proceed - when the LLM is down or replies garbage
         "max_tool_iterations": 12,

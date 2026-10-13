@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 import requests
 
-from .agent import LLM, Agent, Lessons, Playbooks, Toolkit, make_reviewer, reflect
+from .agent import Agent, Lessons, Playbooks, Toolkit, llm_from_config, make_reviewer, reflect
 from .backtest import timeframe_seconds
 from .brokers import make_broker
 from .config import Config
@@ -144,7 +144,7 @@ def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
     agent = None
     lc = cfg["llm"]
     if lc.get("enabled"):
-        llm = LLM.from_config(lc)
+        llm = llm_from_config(lc)
         agent = Agent(llm, toolkit, lc.get("max_tool_iterations", 12), on_event)
         if lc.get("trade_review", True):
             engine.reviewer = make_reviewer(llm, toolkit)

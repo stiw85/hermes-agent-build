@@ -37,6 +37,41 @@ def cmd_init(a: argparse.Namespace) -> None:
     print("Next: edit config.yaml, then `hermes-trader backtest BTC/USDT` and `hermes-trader run --once`.")
 
 
+def cmd_llm(cfg: Any) -> int:
+    """One real call with one tool offered: proves auth, URL, model id and tool calling in one go."""
+    from .agent.llm import LLMError, detect_provider, llm_from_config
+
+    lc = cfg["llm"]
+    provider = detect_provider(lc)
+    llm = llm_from_config(lc)
+    where = {"provider": provider, "url": llm.url, "model": llm.model, "enabled_in_config": bool(lc.get("enabled"))}
+    tool = {"type": "function", "function": {
+        "name": "get_price", "description": "Latest price for a market symbol.",
+        "parameters": {"type": "object", "properties": {"symbol": {"type": "string"}}, "required": ["symbol"]}}}
+    msgs = [{"role": "system", "content": "You are a test harness. Use the tool when asked."},
+            {"role": "user", "content": "Call get_price for BTC/USDT."}]
+    try:
+        first = llm.chat(msgs, tools=[tool])
+        calls = first.get("tool_calls") or []
+        if calls:
+            msgs.append({"role": "assistant", "content": first.get("content") or "", "tool_calls": calls})
+            msgs.append({"role": "tool", "tool_call_id": calls[0].get("id", ""), "content": '{"price": 65000}'})
+            final = llm.chat(msgs, tools=[tool]).get("content") or ""
+        else:
+            final = first.get("content") or ""
+    except LLMError as err:
+        print(f"❌ {err}", file=sys.stderr)
+        _p(where)
+        return 2
+    _p({**where, "ok": True, "tool_calling": bool(calls), "reply": final[:200]})
+    if not calls:
+        print("⚠️  The model answered but did not call the tool: chat/reflect need a tool-calling model.",
+              file=sys.stderr)
+    if not lc.get("enabled"):
+        print("ℹ️  Works. Set llm.enabled: true in config.yaml and restart the backend to use it.", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser("hermes-trader", description="Lean self-improving trading agent")
     ap.add_argument("-c", "--config", help="config file (default: ./config.yaml)")
@@ -68,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     ch.add_argument("message", nargs="*")
     jv = sub.add_parser("jev", help="JEV decision-model report (shadow/gate calibration)")
     jv.add_argument("--test", action="store_true", help="make one live JEV call to check the key and endpoint")
+    sub.add_parser("llm", help="make one live LLM call to check the key, endpoint, model and tool calling")
     sv = sub.add_parser("serve", help="local API for the desktop app (127.0.0.1 only)")
     sv.add_argument("--port", type=int, default=8765, help="0 = pick a free port")
     sv.add_argument("--run", action="store_true", help="start the trading loop immediately")
@@ -85,6 +121,8 @@ def main(argv: list[str] | None = None) -> int:
     from .runtime import build  # heavy imports after arg parsing
 
     cfg = load_config(a.config)
+    if a.cmd == "llm":
+        return cmd_llm(cfg)
     interactive = a.cmd == "chat"
     app = build(cfg, confirm=_confirm if interactive else None,
                 on_event=(lambda k, v: print(f"  · {v['name']}({json.dumps(v['args'])[:120]})")) if interactive

@@ -45,9 +45,15 @@ risk:
 # ---- LLM brain (optional; the bot trades fine without it) -------------------------
 llm:
   enabled: false
+  provider: auto          # auto | openai (any /chat/completions API) | anthropic (Claude API direct)
   base_url: https://openrouter.ai/api/v1   # or http://localhost:11434/v1 for Ollama
   model: nousresearch/hermes-4-70b
   api_key_env: LLM_API_KEY
+  # Claude direct with your Anthropic (Claude Console) API key:
+  #   provider: anthropic
+  #   base_url: https://api.anthropic.com
+  #   model: claude-haiku-5-5        # or claude-sonnet-5-5 / claude-opus-5-5
+  #   and LLM_API_KEY=sk-ant-api... (or ANTHROPIC_API_KEY=...) in .env
   trade_review: true     # LLM may shrink or veto new risk, never enlarge it
   on_review_error: reduce  # LLM down / garbage reply: reduce (half size) | veto | proceed
   max_tool_iterations: 12

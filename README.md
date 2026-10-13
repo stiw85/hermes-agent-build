@@ -6,7 +6,7 @@ The original Hermes is a general-purpose assistant: about 18,000 files and 247 M
 
 | Kept from Hermes | Became |
 |---|---|
-| Model-agnostic LLM loop with tool calling | `agent/llm.py`, `agent/loop.py` (any OpenAI-compatible endpoint: OpenRouter, Nous Portal, OpenAI, Ollama, vLLM…) |
+| Model-agnostic LLM loop with tool calling | `agent/llm.py`, `agent/loop.py` (any OpenAI-compatible endpoint: OpenRouter, Nous Portal, OpenAI, Ollama, vLLM… plus native Anthropic Claude API) |
 | `MEMORY.md` curated memory | `LESSONS.md`: short, falsifiable trading lessons with a character budget |
 | Skills (procedural memory, agentskills.io format) | `hermes_trader/playbooks/*/SKILL.md`: regime checks, drawdown response, onboarding. The agent can write its own. |
 | Background self-review after work | `reflect`: reviews the trade journal, records lessons, re-optimises underperformers |
@@ -73,8 +73,21 @@ llm:
   base_url: https://openrouter.ai/api/v1      # or http://localhost:11434/v1 (Ollama, free, local)
   model: nousresearch/hermes-4-70b
 ```
-Set `LLM_API_KEY` in `.env`, then:
+Set `LLM_API_KEY` in `.env`.
+
+To use Claude directly with an Anthropic API key, use these settings:
+```yaml
+llm:
+  enabled: true
+  provider: anthropic
+  base_url: https://api.anthropic.com
+  model: claude-haiku-5-5        # or claude-sonnet-5-5 / claude-opus-5-5
+```
+The key is a Claude Console API key (`sk-ant-api…`, from platform.claude.com → API keys) and goes in `LLM_API_KEY` or `ANTHROPIC_API_KEY`. A Claude.ai Pro/Max login can't be used: Anthropic's terms keep subscription logins inside its own apps.
+
+Check the setup with one live call, then use it:
 ```bash
+hermes-trader llm                   # checks key, URL, model id and tool calling
 hermes-trader chat "how is ETH doing and is the current strategy still right for it?"
 hermes-trader reflect               # force a self-review now
 hermes-trader lessons               # what it has learned
