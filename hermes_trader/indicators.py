@@ -74,3 +74,65 @@ def swing(df: pd.DataFrame, n: int = 55) -> tuple[pd.Series, pd.Series, pd.Serie
         out_up[n:] = (ih > il).astype(float)
     idx = df.index
     return pd.Series(out_lo, idx), pd.Series(out_hi, idx), pd.Series(out_up, idx)
+
+
+# ---- order flow (needs a taker_buy column: aggressive buy volume per bar) ------------------------
+
+def has_flow(df: pd.DataFrame, n: int = 50) -> bool:
+    """True when the frame carries usable taker-buy volume (Binance, CSV with taker_buy, synthetic)."""
+    if "taker_buy" not in df.columns or len(df) == 0:
+        return False
+    tail = df["taker_buy"].tail(n)
+    return bool(tail.notna().all() and (df["volume"].tail(n) > 0).any())
+
+
+def delta(df: pd.DataFrame) -> pd.Series:
+    """Aggressive buy minus aggressive sell volume per bar."""
+    return 2.0 * df["taker_buy"] - df["volume"]
+
+
+def cvd(df: pd.DataFrame) -> pd.Series:
+    """Cumulative volume delta (only its shape matters; the starting level is arbitrary)."""
+    return delta(df).cumsum()
+
+
+def delta_share(df: pd.DataFrame, n: int) -> pd.Series:
+    """Net aggression over n bars, in [-1, 1]: sum(delta) / sum(volume)."""
+    v = df["volume"].rolling(n).sum()
+    return (delta(df).rolling(n).sum() / v.where(v > 0)).fillna(0.0)
+
+
+CVD_DIVERGENCE = {
+    1: "bullish: price lower low, CVD higher low (sellers exhausted)",
+    2: "bullish: price higher low, CVD lower low (buyers absorbing sellers)",
+    -1: "bearish: price higher high, CVD lower high (buyers exhausted)",
+    -2: "bearish: price lower high, CVD higher high (sellers absorbing buyers)",
+}
+
+
+def cvd_divergence(df: pd.DataFrame, n: int = 24) -> pd.Series:
+    """Compare the last n bars with the n before: the four price-vs-CVD divergences.
+
+    Returns a code per bar (see CVD_DIVERGENCE; 0 = none). Sign = direction (+ bullish, - bearish).
+    When both a bullish and a bearish case fire on the same bar they cancel to 0.
+    """
+    c = cvd(df)
+    ph, pl = df["high"].rolling(n).max(), df["low"].rolling(n).min()
+    ch, cl = c.rolling(n).max(), c.rolling(n).min()
+    php, plp, chp, clp = ph.shift(n), pl.shift(n), ch.shift(n), cl.shift(n)
+    bull1 = (pl < plp) & (cl > clp)
+    bull2 = (pl > plp) & (cl < clp)
+    bear1 = (ph > php) & (ch < chp)
+    bear2 = (ph < php) & (ch > chp)
+    bull = np.where(bull1, 1, np.where(bull2, 2, 0))
+    bear = np.where(bear1, -1, np.where(bear2, -2, 0))
+    out = np.where((bull != 0) & (bear != 0), 0, bull + bear)
+    return pd.Series(out, index=df.index).astype(int)
+
+
+def candle_delta_divergence(df: pd.DataFrame, min_share: float = 0.1) -> pd.Series:
+    """+1: green bar despite net selling (sellers absorbed); -1: red bar despite net buying."""
+    share = (delta(df) / df["volume"].where(df["volume"] > 0)).fillna(0.0)
+    up, down = df["close"] > df["open"], df["close"] < df["open"]
+    return pd.Series(np.where(up & (share <= -min_share), 1, np.where(down & (share >= min_share), -1, 0)),
+                     index=df.index).astype(int)

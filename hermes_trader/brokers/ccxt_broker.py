@@ -8,6 +8,7 @@ or exchange-specific BINANCE_API_KEY / BINANCE_SECRET etc. which take priority.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -18,6 +19,8 @@ import pandas as pd
 from ..backtest import timeframe_seconds
 from ..models import Account, Fill, Order, Position, Side
 from .base import Broker, to_frame
+
+log = logging.getLogger("hermes_trader.ccxt")
 
 
 def _env(exchange: str, key: str) -> str | None:
@@ -71,6 +74,51 @@ class CCXTBroker(Broker):
 
     # ---- data ---------------------------------------------------------
     def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        raw = self._kline_source(symbol)
+        if raw is not None:
+            try:
+                return self._binance_klines(raw, symbol, timeframe, limit)
+            except Exception as e:  # noqa: BLE001 - fall back to plain OHLCV
+                log.warning("binance klines failed for %s (%s); using plain OHLCV", symbol, e)
+        return self._ohlcv(symbol, timeframe, limit)
+
+    def _kline_source(self, symbol: str) -> tuple[Any, str] | None:
+        """Binance's raw kline endpoints include taker-buy volume (order flow); other venues don't."""
+        if not self.exchange_id.startswith("binance"):
+            return None
+        try:
+            m = self.markets.get(symbol) or {}
+        except Exception:  # noqa: BLE001
+            return None
+        name = ("publicGetKlines" if m.get("spot") else "fapiPublicGetKlines" if m.get("linear")
+                else "dapiPublicGetKlines" if m.get("inverse") else None)
+        fn = getattr(self.x, name, None) if name else None
+        return (fn, m["id"]) if fn and m.get("id") else None
+
+    def _binance_klines(self, raw: tuple[Any, str], symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+        fn, market_id = raw
+        interval = (getattr(self.x, "timeframes", None) or {}).get(timeframe, timeframe)
+        step_ms = timeframe_seconds(timeframe) * 1000
+        page = 1000
+        start = self.x.milliseconds() - (limit + 1) * step_ms
+        rows: list[list[Any]] = []
+        while len(rows) < limit + 1:
+            batch = fn({"symbol": market_id, "interval": interval, "limit": page, "startTime": int(start)})
+            if not batch:
+                break
+            rows.extend(batch)
+            if int(batch[-1][0]) + step_ms > self.x.milliseconds() or len(batch) < 2:
+                break
+            start = int(batch[-1][0]) + step_ms
+        if not rows:
+            return to_frame([])
+        df = to_frame([[int(r[0]), *(float(x) for x in r[1:6])] for r in rows])
+        tb = pd.Series([float(r[9]) for r in rows],
+                       index=pd.DatetimeIndex(pd.to_datetime([int(r[0]) for r in rows], unit="ms", utc=True)))
+        df["taker_buy"] = tb[~tb.index.duplicated(keep="last")].reindex(df.index)
+        return df.tail(limit)
+
+    def _ohlcv(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
         page = 1000
         if limit <= page:
             return to_frame(self.x.fetch_ohlcv(symbol, timeframe, limit=limit)).tail(limit)

@@ -202,5 +202,67 @@ class MarketStructure(Strategy):
         return pd.Series(out, index=df.index)
 
 
+class FlowReversal(Strategy):
+    name = "flow_reversal"
+    description = ("Order flow (needs taker volume, e.g. Binance): at the low of the last N bars, a bar with heavy "
+                   "net selling that still closes in its upper half (absorption), then within 3 bars a close above "
+                   "that bar's high with net buying (initiation) -> long. Stop below the zone, target the prior "
+                   "N-bar high. cvd=1 also needs a bullish CVD divergence. Mirror for shorts. Inactive without "
+                   "order-flow data.")
+    defaults = {"zone_bars": 48, "zone_atr": 1.0, "absorb": 0.15, "cvd": 0}
+    grid = {"zone_bars": [24, 48, 96], "zone_atr": [0.5, 1.0], "absorb": [0.1, 0.2], "cvd": [0, 1]}
+
+    @classmethod
+    def valid(cls, p: dict[str, Any]) -> bool:
+        return p["zone_bars"] >= 5 and p["zone_atr"] > 0 and 0 < p["absorb"] < 1 and p["cvd"] in (0, 1)
+
+    def warmup(self) -> int:
+        return 2 * self.params["zone_bars"] + 2
+
+    def targets(self, df: pd.DataFrame) -> pd.Series:
+        n = len(df)
+        if not ind.has_flow(df, min(n, 50)):
+            return pd.Series(0.0, index=df.index)
+        p = self.params
+        N, za, ab, need_cvd = p["zone_bars"], p["zone_atr"], p["absorb"], bool(p["cvd"])
+        o, h, lo, c, v = (df[k].to_numpy(float) for k in ("open", "high", "low", "close", "volume"))
+        share = np.divide(ind.delta(df).to_numpy(float), v, out=np.zeros(n), where=v > 0)
+        atr = ind.atr(df).to_numpy(float)
+        div = ind.cvd_divergence(df, N).to_numpy() if need_cvd else np.zeros(n, dtype=int)
+        zl = pd.Series(lo).rolling(N).min().shift(1).to_numpy()  # zone from the previous N bars
+        zh = pd.Series(h).rolling(N).max().shift(1).to_numpy()
+        out = np.zeros(n)
+        pos, stop, target = 0, 0.0, 0.0
+        cand_long = cand_short = None  # (bar, level to clear, stop)
+        for t in range(n):
+            a = atr[t]
+            if not (np.isfinite(a) and np.isfinite(zl[t]) and np.isfinite(zh[t])):
+                out[t] = pos
+                continue
+            if pos > 0 and (c[t] < stop or c[t] >= target):
+                pos = 0
+            elif pos < 0 and (c[t] > stop or c[t] <= target):
+                pos = 0
+            mid = (h[t] + lo[t]) / 2
+            # initiation: clears the absorption bar with aggression on our side
+            if cand_long and t - cand_long[0] <= 3 and pos <= 0 and c[t] > cand_long[1] and share[t] > 0 \
+                    and (not need_cvd or div[cand_long[0]: t + 1].max() > 0):
+                pos, stop, target, cand_long = 1, cand_long[2], zh[t], None
+            elif cand_short and t - cand_short[0] <= 3 and pos >= 0 and c[t] < cand_short[1] and share[t] < 0 \
+                    and (not need_cvd or div[cand_short[0]: t + 1].min() < 0):
+                pos, stop, target, cand_short = -1, cand_short[2], zl[t], None
+            if cand_long and t - cand_long[0] > 3:
+                cand_long = None
+            if cand_short and t - cand_short[0] > 3:
+                cand_short = None
+            # absorption in the zone: heavy selling at the lows, yet the bar closes in its upper half
+            if lo[t] <= zl[t] + za * a and share[t] <= -ab and c[t] >= mid:
+                cand_long = (t, h[t], min(lo[t], zl[t]) - 0.25 * a)
+            if h[t] >= zh[t] - za * a and share[t] >= ab and c[t] <= mid:
+                cand_short = (t, lo[t], max(h[t], zh[t]) + 0.25 * a)
+            out[t] = pos
+        return pd.Series(out, index=df.index)
+
+
 BUILTINS: list[type[Strategy]] = [SMACross, EMACross, RSIReversion, DonchianBreakout, BollingerReversion, TrendFilteredRSI,
-                                  FibRetracement, MarketStructure]
+                                  FibRetracement, MarketStructure, FlowReversal]

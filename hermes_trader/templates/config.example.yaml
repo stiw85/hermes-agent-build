@@ -96,6 +96,9 @@ filters:
     enabled: true
     bars: 24
     max_z: 2.0
+  flow:              # order flow: no new long into a bearish CVD divergence (needs Binance taker volume)
+    enabled: true
+    bars: 24
 
 # ---- self-improvement -------------------------------------------------------------
 improve:
@@ -105,7 +108,7 @@ improve:
   min_improvement: 0.10
   max_drawdown: 0.25
   max_candidates: 60
-  strategies: [sma_cross, ema_cross, rsi_reversion, donchian_breakout, bollinger_reversion, trend_rsi, fib_retracement, market_structure]
+  strategies: [sma_cross, ema_cross, rsi_reversion, donchian_breakout, bollinger_reversion, trend_rsi, fib_retracement, market_structure, flow_reversal]
   reflect_after_trades: 10
   promote_cooldown_hours: 24   # max one agent-requested promotion per symbol per window
 

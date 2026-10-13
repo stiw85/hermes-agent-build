@@ -83,8 +83,14 @@ class SyntheticData:
         high = np.maximum(open_, close) * (1 + wig[0])
         low = np.minimum(open_, close) * (1 - wig[1])
         vol = np.exp(10 + 0.5 * wig_raw[1])
+        # aggressive (taker) buying: leans with the bar's move, plus noise -> delta / CVD for order-flow
+        # features. Own random stream, so adding it changed none of the prices above.
+        flow = np.concatenate([np.random.default_rng([_seed(symbol) % 2**63, step, anchor, j, 7]).normal(0, 1, chunk)
+                               for j in range(k)])[:n]
+        share = np.clip(0.5 + 0.3 * np.tanh(rets / base_vol) + 0.08 * flow, 0.03, 0.97)
         idx = pd.DatetimeIndex(pd.to_datetime(anchor + np.arange(n) * step, unit="s", utc=True), name="ts")
-        df = pd.DataFrame({"open": open_, "high": high, "low": low, "close": close, "volume": vol}, index=idx)
+        df = pd.DataFrame({"open": open_, "high": high, "low": low, "close": close, "volume": vol,
+                           "taker_buy": vol * share}, index=idx)
         self._cache = {key: df}
         return df
 
@@ -110,7 +116,8 @@ class CSVData:
         ts = df.pop("ts")
         unit = "ms" if pd.api.types.is_numeric_dtype(ts) else None
         df.index = pd.DatetimeIndex(pd.to_datetime(ts, unit=unit, utc=True), name="ts")
-        return df[OHLCV_COLS].astype(float).sort_index().tail(limit)
+        cols = OHLCV_COLS + (["taker_buy"] if "taker_buy" in df.columns else [])  # optional order-flow column
+        return df[cols].astype(float).sort_index().tail(limit)
 
     def last_price(self, symbol: str) -> float:
         files = sorted(self.dir.glob(f"{symbol.replace('/', '-')}_*.csv"))
@@ -123,7 +130,7 @@ def save_csv(df: pd.DataFrame, directory: str | Path, symbol: str, timeframe: st
     d = Path(directory)
     d.mkdir(parents=True, exist_ok=True)
     p = d / f"{symbol.replace('/', '-')}_{timeframe}.csv"
-    out = df[OHLCV_COLS].copy()
+    out = df[OHLCV_COLS + (["taker_buy"] if "taker_buy" in df.columns else [])].copy()
     out.index = out.index.map(lambda t: t.isoformat())
     out.index.name = "ts"
     out.to_csv(p)

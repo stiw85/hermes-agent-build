@@ -11,7 +11,8 @@ Filters
           support/resistance zone in the trade's direction / ATR-stop distance. Fails below min_rr.
 - stretch (BSM sigma):    don't chase. The last N-bar move in sigma units; a long fails above +max_z,
           a short below -max_z.
-More filters (order flow, volatility regime, event blackout) plug in the same way.
+- flow    (order flow):   a long fails while a bearish CVD divergence is active (a short: bullish).
+          Needs taker volume (Binance / synthetic / CSV with taker_buy); passes when there is none.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from . import indicators as ind
 from .backtest import timeframe_seconds
 from .context import describe_level, key_levels, nearest_levels, p_touch, sigma_per_bar, stretch_z, to_daily
 
-FILTER_NAMES = ("levels", "stretch")
+FILTER_NAMES = ("levels", "stretch", "flow")
 
 
 @dataclass
@@ -105,6 +106,8 @@ class EntryFilters:
             out.append(self.check_levels(side, price, df, atr, daily))
         if self.enabled("stretch"):
             out.append(self.check_stretch(side, df))
+        if self.enabled("flow"):
+            out.append(self.check_flow(side, df))
         return out
 
     def check_levels(self, side: int, price: float, df: pd.DataFrame, atr: float | None,
@@ -138,6 +141,20 @@ class EntryFilters:
         chasing = side * z > limit
         return FilterResult("stretch", not chasing, round(z, 3),
                             f"last {bars} bars moved {z:+.1f}σ" + (f" (beyond ±{limit:g}σ: chasing)" if chasing else ""))
+
+
+    def check_flow(self, side: int, df: pd.DataFrame) -> FilterResult:
+        fc = self.sub("flow")
+        n = int(fc.get("bars", 24))
+        if not ind.has_flow(df, min(len(df), 50)):
+            return FilterResult("flow", True, None, "no order-flow data on this venue")
+        if len(df) < 2 * n:
+            return FilterResult("flow", True, None, "not enough bars for order flow yet")
+        code = int(ind.cvd_divergence(df, n).iloc[-1])
+        share = float(ind.delta_share(df, n).iloc[-1])
+        against = code * side < 0
+        note = f"net aggression {share:+.0%} over {n} bars" + (f"; {ind.CVD_DIVERGENCE[code]}" if code else "")
+        return FilterResult("flow", not against, round(share, 4), note)
 
 
 # ---- reports -------------------------------------------------------------------------------------

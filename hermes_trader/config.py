@@ -90,6 +90,7 @@ DEFAULTS: dict[str, Any] = {
         "min_resolved": 30,  # scored would-be blocks needed before the report recommends act
         "levels": {"enabled": True, "min_rr": 1.5, "pivot": 3, "round_numbers": True, "lookback": 180},
         "stretch": {"enabled": True, "bars": 24, "max_z": 2.0, "vol_bars": 100},
+        "flow": {"enabled": True, "bars": 24},
     },
     "improve": {
         "lookback_bars": 2000,
@@ -99,7 +100,8 @@ DEFAULTS: dict[str, Any] = {
         "max_drawdown": 0.25,  # reject candidates with OOS DD above this
         "max_candidates": 60,
         "strategies": ["sma_cross", "ema_cross", "rsi_reversion", "donchian_breakout", "bollinger_reversion",
-                       "trend_rsi", "fib_retracement", "market_structure"],
+                       "trend_rsi", "fib_retracement", "market_structure",
+                       "flow_reversal"],
         "reflect_after_trades": 10,
         "promote_cooldown_hours": 24,  # agent-requested promotions per symbol
     },

@@ -50,6 +50,7 @@ STRATEGY_STYLE = {
     "bollinger_reversion": "mean reversion (fade moves outside Bollinger bands)",
     "trend_rsi": "buy-the-dip inside an uptrend",
     "market_structure": "price action (buy the retest after a break of structure; exit when structure breaks)",
+    "flow_reversal": "order-flow reversal (absorption at a range extreme, then initiation the other way)",
     "fib_retracement": "pullback (buy a Fibonacci retracement of the last swing, or sell one in a down-swing)",
 }
 
@@ -164,6 +165,7 @@ def _level_facts(df: pd.DataFrame) -> dict[str, Any]:
         "nearest_resistance_distance_pct": cx.get("resistance_dist_pct"),
         "typical_move_next_24_bars_pct": em.get("sigma_pct"),
         "last_24_bar_move_in_sigmas": cx.get("stretch_z_24"),
+        **({"order_flow": cx["order_flow"]} if cx.get("order_flow") else {}),
     }
 
 

@@ -142,7 +142,7 @@ def test_shadow_changes_nothing_and_scores_checks(tmp_path, now):
                                               "levels": {"min_rr": 50.0}, "stretch": {"max_z": 0.01}}, name="s")
     assert fills_of(base) and fills_of(base) == fills_of(shadow)
     rows = shadow.journal.filter_rows()
-    assert {r["name"] for r in rows} == {"levels", "stretch"}
+    assert {r["name"] for r in rows} == {"levels", "stretch", "flow"}  # synthetic data has taker volume
     assert all(r["applied"] == 0 for r in rows) and any(not r["passed"] for r in rows)
     assert any(r["resolved_ts"] for r in rows)
     d = shadow.journal.rows("SELECT risk_notes FROM decisions WHERE risk_notes LIKE '%would skip (shadow)%'")

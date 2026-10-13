@@ -179,6 +179,16 @@ def price_context(df: pd.DataFrame, daily: pd.DataFrame | None, horizon_bars: in
     out["nearest_resistance"] = describe_level(res)
     out["support_dist_pct"] = round((sup["price"] / price - 1) * 100, 3) if sup else None
     out["resistance_dist_pct"] = round((res["price"] / price - 1) * 100, 3) if res else None
+    if ind.has_flow(df) and len(df) > 50:
+        code = int(ind.cvd_divergence(df, 24).iloc[-1])
+        last = int(ind.candle_delta_divergence(df).iloc[-1])
+        out["order_flow"] = {
+            "net_aggression_24b": round(float(ind.delta_share(df, 24).iloc[-1]), 4),
+            "net_aggression_last_bar": round(float(ind.delta_share(df, 1).iloc[-1]), 4),
+            "cvd_divergence": ind.CVD_DIVERGENCE.get(code, "none"),
+            "last_bar": {1: "green bar despite net selling (sellers absorbed)",
+                         -1: "red bar despite net buying (buyers absorbed)"}.get(last, "delta agrees with the bar"),
+        }
     if s:
         for name, z in (("support", sup), ("resistance", res)):
             if z:
