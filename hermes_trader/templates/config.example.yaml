@@ -99,6 +99,20 @@ filters:
   flow:              # order flow: no new long into a bearish CVD divergence (needs Binance taker volume)
     enabled: true
     bars: 24
+  vol:               # volatility regime -> trade at reduce_to size (act mode) when stressed
+    enabled: true
+    max_expansion: 2.0   # last 24 bars' realised vol vs the last 720 bars'
+    iv: true             # also read implied vol: Deribit DVOL (BTC/ETH), CBOE VIX (US stocks)
+    max_iv_premium: 1.5  # options pricing a move this many times bigger than recent reality
+    reduce_to: 0.5
+  events:            # no new entries around scheduled macro events (all symbols)
+    enabled: true
+    before_minutes: 60
+    after_minutes: 60
+    action: skip     # skip | reduce
+    # dates: replaces the built-in list (FOMC to 2027, CPI to Jan 2027). Times in their own zone:
+    # - "2026-10-28 14:00 America/New_York FOMC"
+    # - "2026-11-10 08:30 America/New_York CPI (Oct)"
 
 # ---- self-improvement -------------------------------------------------------------
 improve:

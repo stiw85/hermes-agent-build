@@ -124,6 +124,11 @@ def build(cfg: Config, confirm: Callable[[str], bool] | None = None,
         from .filters import EntryFilters
 
         engine.filters = EntryFilters(cfg["filters"], cfg["risk"], broker, cfg["timeframe"])
+        vc = cfg["filters"].get("vol") or {}
+        if vc.get("enabled", True) and vc.get("iv", True):
+            from .vol import ImpliedVol
+
+            engine.filters.iv = ImpliedVol()
     b = cfg["broker"]
     improver = Improver(cfg["improve"], fee_bps=b["fee_bps"], slippage_bps=b["slippage_bps"],
                         timeframe=cfg["timeframe"], allow_short=cfg["allow_short"])

@@ -91,6 +91,25 @@ DEFAULTS: dict[str, Any] = {
         "levels": {"enabled": True, "min_rr": 1.5, "pivot": 3, "round_numbers": True, "lookback": 180},
         "stretch": {"enabled": True, "bars": 24, "max_z": 2.0, "vol_bars": 100},
         "flow": {"enabled": True, "bars": 24},
+        # volatility regime: realised vol exploding, or options (Deribit DVOL / CBOE VIX) pricing a big move
+        "vol": {"enabled": True, "short_bars": 24, "long_bars": 720, "max_expansion": 2.0, "iv": True,
+                "max_iv_premium": 1.5, "reduce_to": 0.5},
+        # scheduled macro events (times with an IANA zone; FOMC 2:00pm ET, CPI 8:30am ET). Keep it updated.
+        "events": {"enabled": True, "before_minutes": 60, "after_minutes": 60, "action": "skip", "dates": [
+            "2026-10-28 14:00 America/New_York FOMC",
+            "2026-11-10 08:30 America/New_York CPI (Oct)",
+            "2026-12-09 14:00 America/New_York FOMC",
+            "2026-12-10 08:30 America/New_York CPI (Nov)",
+            "2027-01-13 08:30 America/New_York CPI (Dec)",
+            "2027-01-27 14:00 America/New_York FOMC (tentative)",
+            "2027-03-17 14:00 America/New_York FOMC (tentative)",
+            "2027-04-28 14:00 America/New_York FOMC (tentative)",
+            "2027-06-09 14:00 America/New_York FOMC (tentative)",
+            "2027-07-28 14:00 America/New_York FOMC (tentative)",
+            "2027-09-15 14:00 America/New_York FOMC (tentative)",
+            "2027-10-27 14:00 America/New_York FOMC (tentative)",
+            "2027-12-08 14:00 America/New_York FOMC (tentative)",
+        ]},
     },
     "improve": {
         "lookback_bars": 2000,

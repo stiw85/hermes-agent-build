@@ -29,7 +29,7 @@ from . import indicators as ind
 from .backtest import timeframe_seconds
 from .context import describe_level, key_levels, nearest_levels, p_touch, sigma_per_bar, stretch_z, to_daily
 
-FILTER_NAMES = ("levels", "stretch", "flow")
+FILTER_NAMES = ("levels", "stretch", "flow", "vol", "events")
 
 
 @dataclass
@@ -38,6 +38,33 @@ class FilterResult:
     passed: bool
     value: float | None
     note: str
+    mult: float = 0.0  # in act mode a failing filter scales size by this; 0 = skip the entry
+
+
+def parse_events(items: list[Any]) -> list[tuple[datetime, str]]:
+    """'2026-10-28 14:00 America/New_York FOMC' | '2026-11-10T13:30Z CPI' -> [(utc datetime, label)]."""
+    from zoneinfo import ZoneInfo
+
+    out = []
+    for raw in items or []:
+        parts = str(raw).split()
+        if not parts:
+            continue
+        try:
+            if "T" in parts[0]:
+                when, rest = parts[0].replace("Z", "+00:00"), parts[1:]
+            else:
+                when, rest = f"{parts[0]}T{parts[1] if len(parts) > 1 else '00:00'}", parts[2:]
+            tz = None
+            if rest and ("/" in rest[0] or rest[0].upper() in ("UTC", "Z")):
+                tz, rest = rest[0], rest[1:]
+            dt = datetime.fromisoformat(when)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=ZoneInfo("UTC" if tz in (None, "Z", "z") else tz))
+            out.append((dt.astimezone(ZoneInfo("UTC")), " ".join(rest) or "event"))
+        except (ValueError, KeyError) as e:
+            raise ValueError(f"bad event {raw!r}: use 'YYYY-MM-DD HH:MM Area/City Name' ({e})") from None
+    return sorted(out)
 
 
 def _finite(x: Any) -> float | None:
@@ -56,6 +83,8 @@ class EntryFilters:
         self.broker = broker
         self.tf = timeframe
         self._daily: dict[str, tuple[str, pd.DataFrame]] = {}
+        self.events = parse_events(self.sub("events").get("dates") or [])
+        self.iv: Any = None  # vol.ImpliedVol, attached by the runtime when vol.iv is on
 
     # ---- config ------------------------------------------------------------------------------
     def sub(self, name: str) -> dict[str, Any]:
@@ -100,7 +129,8 @@ class EntryFilters:
 
     # ---- checks ------------------------------------------------------------------------------
     def evaluate(self, side: int, price: float, df: pd.DataFrame, atr: float | None,
-                 daily: pd.DataFrame) -> list[FilterResult]:
+                 daily: pd.DataFrame, symbol: str = "", now: datetime | None = None,
+                 implied: tuple[float, str] | None = None) -> list[FilterResult]:
         out = []
         if self.enabled("levels"):
             out.append(self.check_levels(side, price, df, atr, daily))
@@ -108,7 +138,19 @@ class EntryFilters:
             out.append(self.check_stretch(side, df))
         if self.enabled("flow"):
             out.append(self.check_flow(side, df))
+        if self.enabled("vol"):
+            out.append(self.check_vol(df, symbol, implied))
+        if self.enabled("events"):
+            out.append(self.check_events(now or df.index[-1].to_pydatetime()))
         return out
+
+    def implied_vol(self, symbol: str) -> tuple[float, str] | None:
+        if self.iv is None or not self.sub("vol").get("iv", True):
+            return None
+        try:
+            return self.iv.for_symbol(symbol)
+        except Exception:  # noqa: BLE001
+            return None
 
     def check_levels(self, side: int, price: float, df: pd.DataFrame, atr: float | None,
                      daily: pd.DataFrame) -> FilterResult:
@@ -155,6 +197,50 @@ class EntryFilters:
         against = code * side < 0
         note = f"net aggression {share:+.0%} over {n} bars" + (f"; {ind.CVD_DIVERGENCE[code]}" if code else "")
         return FilterResult("flow", not against, round(share, 4), note)
+
+
+    def check_vol(self, df: pd.DataFrame, symbol: str = "", implied: tuple[float, str] | None = None) -> FilterResult:
+        """Volatility regime: recent realised vol exploding vs normal, or options pricing a big move."""
+        from .backtest import periods_per_year
+        from .brokers.base import asset_class_of
+
+        vc = self.sub("vol")
+        short, long_ = int(vc.get("short_bars", 24)), int(vc.get("long_bars", 720))
+        r = np.log(df["close"]).diff().dropna()
+        if len(r) < max(short * 3, 100):
+            return FilterResult("vol", True, None, "not enough history")
+        ppy = periods_per_year(self.tf, asset_class_of(symbol).value if symbol else "crypto")
+        rv_s = float(r.tail(short).std(ddof=1) * math.sqrt(ppy))
+        rv_l = float(r.tail(long_).std(ddof=1) * math.sqrt(ppy))
+        if not rv_l > 0:
+            return FilterResult("vol", True, None, "no volatility")
+        exp = rv_s / rv_l
+        parts = [f"realised vol {rv_s:.0%} over {short} bars vs {rv_l:.0%} normal (x{exp:.1f})"]
+        stressed = exp > float(vc.get("max_expansion", 2.0))
+        if implied:
+            iv, src = implied
+            prem = iv / 100 / rv_l
+            parts.append(f"{src} {iv:.0f}% = x{prem:.1f} realised")
+            stressed = stressed or prem > float(vc.get("max_iv_premium", 1.5))
+        note = "; ".join(parts) + ("; stressed: trade smaller" if stressed else "")
+        return FilterResult("vol", not stressed, round(exp, 3), note, mult=float(vc.get("reduce_to", 0.5)))
+
+    def check_events(self, now: datetime) -> FilterResult:
+        ec = self.sub("events")
+        before = pd.Timedelta(minutes=int(ec.get("before_minutes", 60)))
+        after = pd.Timedelta(minutes=int(ec.get("after_minutes", 60)))
+        ts = pd.Timestamp(now)
+        ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+        for when, label in self.events:
+            w = pd.Timestamp(when)
+            if w - before <= ts <= w + after:
+                mins = int((w - ts).total_seconds() // 60)
+                rel = f"in {mins} min" if mins > 0 else f"{-mins} min ago"
+                return FilterResult("events", False, float(mins), f"{label} {rel} (blackout ±window)",
+                                    mult=0.5 if ec.get("action", "skip") == "reduce" else 0.0)
+        nxt = next(((w, lab) for w, lab in self.events if pd.Timestamp(w) > ts), None)
+        return FilterResult("events", True, None, f"next event: {nxt[1]} {nxt[0]:%Y-%m-%d %H:%M}Z" if nxt
+                            else "no upcoming events listed")
 
 
 # ---- reports -------------------------------------------------------------------------------------
@@ -231,7 +317,7 @@ def evaluate_history(df: pd.DataFrame, targets: pd.Series, filters: EntryFilters
                                      "low": [part["low"].min()], "close": [part["close"].iloc[-1]],
                                      "volume": [part["volume"].sum()]}, index=[day])])
         entries += 1
-        verdicts = filters.evaluate(side, float(close[i]), hist, atr[i], d)
+        verdicts = filters.evaluate(side, float(close[i]), hist, atr[i], d, now=df.index[i].to_pydatetime())
         for r in verdicts:
             per[r.name]["passed" if r.passed else "blocked"].append((trade, fwd))
         if details:

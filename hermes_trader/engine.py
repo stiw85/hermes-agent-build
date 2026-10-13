@@ -172,8 +172,13 @@ class Engine:
             dec.order, blocked_by = None, "JEV regime"
             dec.notes.append("JEV: strategy stands aside in this regime (no new risk)")
         if dec.order and self.filters and self._adds_risk(dec):
-            if self._filters(sym, sig, dec, df, price, now):
+            mult = self._filters(sym, sig, dec, df, price, now)
+            if mult <= 0:
                 dec.order, blocked_by = None, "filters"
+            elif mult < 1.0:
+                dec.order.qty *= mult
+                if dec.order.qty * price < self.cfg["risk"]["min_order_notional"]:
+                    dec.order, blocked_by = None, "filters"
         if dec.order and self.jev and self._adds_risk(dec):
             jev_id, jev_p, jev_note = self._jev_review(sig, dec, acct, df, price)
             if dec.order is None:
@@ -301,28 +306,34 @@ class Engine:
         return block, note
 
     def _filters(self, sym: str, sig: Signal, dec: RiskDecision, df: pd.DataFrame, price: float,
-                 now: datetime) -> bool:
-        """Run entry filters on a new-risk order. Notes go on the decision; True = skip it (act mode)."""
+                 now: datetime) -> float:
+        """Run entry filters on a new-risk order. Notes go on the decision.
+
+        Returns the size multiplier from filters acting in act mode: 1 = untouched, 0 = skip.
+        """
         f = self.filters
         side = 1 if dec.desired_notional > 0 else -1
         base = {"ts": now.isoformat(), "symbol": sym, "strategy": sig.strategy, "side_sign": side, "price": price}
         try:
-            results = f.evaluate(side, price, df, sig.atr, f.daily(sym, df, now))
+            results = f.evaluate(side, price, df, sig.atr, f.daily(sym, df, now), symbol=sym, now=now,
+                                 implied=f.implied_vol(sym) if f.enabled("vol") else None)
         except Exception as e:  # noqa: BLE001 - filters are advisory; never stop trading
             log.warning("filters failed for %s: %s", sym, e)
             self.journal.filter_check(**base, name="error", passed=1, mode="", error=str(e)[:300])
             dec.notes.append(f"filters error: {e}"[:200])
-            return False
-        block = False
+            return 1.0
+        mult = 1.0
         for r in results:
             mode = f.mode(r.name)
             act = mode == "act" and not r.passed
             self.journal.filter_check(**base, name=r.name, passed=int(r.passed), applied=int(act), mode=mode,
                                       value=r.value, note=r.note[:300])
-            tail = "" if r.passed else (" → skipped" if act else " → would skip (shadow)")
+            verb = "skip" if r.mult <= 0 else f"size x{r.mult:g}"
+            tail = "" if r.passed else (f" → {verb}" if act else f" → would {verb} (shadow)")
             dec.notes.append(f"{r.name}: {r.note}{tail}")
-            block = block or act
-        return block
+            if act:
+                mult = min(mult, max(0.0, r.mult))
+        return mult
 
     def _jev_outcome(self, sym: str, realized: float, remaining_qty: float) -> None:
         self.journal.jev_add_pnl(sym, realized)
