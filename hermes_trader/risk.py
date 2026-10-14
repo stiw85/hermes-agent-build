@@ -69,7 +69,9 @@ class RiskManager:
         return price <= avg_price - dist if qty > 0 else price >= avg_price + dist
 
     # ---- sizing --------------------------------------------------------
-    def size(self, signal: Signal, account: Account, price: float, level: str = "ok") -> RiskDecision:
+    def size(self, signal: Signal, account: Account, price: float, level: str = "ok",
+             correlated: dict[str, float] | None = None) -> RiskDecision:
+        """`correlated`: other symbols that move with this one -> their stop distance as a fraction of price."""
         c = self.c
         eq = account.equity
         notes: list[str] = []
@@ -98,6 +100,30 @@ class RiskManager:
         if abs(desired) > room:
             notes.append(f"gross exposure cap: {abs(desired):.0f} -> {room:.0f}")
             desired = room if desired > 0 else -room
+
+        adding = abs(desired) > abs(cur_val) or desired * cur_val < 0
+
+        # max open positions: no new symbol once the book is full (a position already held may change)
+        max_open = int(c.get("max_open_positions") or 0)
+        if max_open and adding and not cur_qty and desired:
+            open_n = sum(1 for s, p in account.positions.items() if s != signal.symbol and p.qty)
+            if open_n >= max_open:
+                notes.append(f"max open positions ({max_open}) reached: no new symbol")
+                desired = 0.0
+
+        # correlated risk: positions that move together count as one bet
+        corr_cap = float(c.get("correlated_risk_pct") or 0.0)
+        if corr_cap and correlated and adding and desired and signal.atr and price > 0:
+            used = sum(abs(account.positions[s].qty * (account.positions[s].market_price or account.positions[s].avg_price))
+                       * stop for s, stop in correlated.items()
+                       if s in account.positions and account.positions[s].qty)
+            my_stop = c["atr_stop_mult"] * signal.atr / price
+            allowed = max(0.0, corr_cap * eq - used) / my_stop if my_stop > 0 else abs(desired)
+            keep = abs(cur_val) if desired * cur_val > 0 else 0.0  # never force a cut of what we already hold
+            limit = max(allowed, keep)
+            if abs(desired) > limit:
+                notes.append(f"correlated risk cap ({', '.join(sorted(correlated))}): {abs(desired):.0f} -> {limit:.0f}")
+                desired = limit if desired > 0 else -limit
 
         delta = desired - cur_val
         reducing = abs(desired) < abs(cur_val) and (desired * cur_val >= 0)

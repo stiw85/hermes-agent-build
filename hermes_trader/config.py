@@ -49,6 +49,12 @@ DEFAULTS: dict[str, Any] = {
         "max_drawdown_pct": 0.15,  # kill switch: flatten + halt
         "rebalance_threshold": 0.10,  # ignore target changes smaller than this
         "max_trades_per_day": 20,
+        "max_open_positions": 5,  # no new symbol beyond this many open positions (0 = no limit)
+        # combined stop-risk of positions that move together (return correlation >= threshold over the
+        # last correlation_bars) may not exceed this share of equity (The Trading Cafe: 2%); 0 = off
+        "correlated_risk_pct": 0.02,
+        "correlation_threshold": 0.7,
+        "correlation_bars": 200,
     },
     "llm": {
         "enabled": False,

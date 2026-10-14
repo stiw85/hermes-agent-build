@@ -41,6 +41,8 @@ risk:
   max_drawdown_pct: 0.15
   rebalance_threshold: 0.10
   max_trades_per_day: 20
+  max_open_positions: 5        # no new symbol beyond this many open positions
+  correlated_risk_pct: 0.02    # combined stop-risk of positions moving together (corr >= 0.7) <= 2% equity
 
 # ---- LLM brain (optional; the bot trades fine without it) -------------------------
 llm:

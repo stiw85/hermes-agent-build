@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+import numpy as np
 import pandas as pd
 
 from . import indicators as ind
@@ -83,6 +84,8 @@ class Engine:
         self.state = RiskState(**{k: v for k, v in raw.get("risk", {}).items() if k in RiskState.__dataclass_fields__})
         self.cooldown: dict[str, int] = raw.get("cooldown", {})  # symbol -> side sign blocked after a stop
         self.meta: dict[str, Any] = raw.get("meta", {})
+        self._rets: dict[str, pd.Series] = {}  # recent log returns per symbol (correlation risk)
+        self._stop_pct: dict[str, float] = {}  # latest ATR-stop distance per symbol, as a fraction of price
 
     @property
     def symbols(self) -> list[str]:
@@ -178,7 +181,7 @@ class Engine:
                                   llm_verdict="", llm_note="", action="hold", jev_p=None, jev_note=check_note or None)
             return {"strategy": repr(strat), "target": sig.target, "price": price, "action": "hold", "notes": [why]}
 
-        dec = self.risk.size(sig, acct, price, level)
+        dec = self.risk.size(sig, acct, price, level, correlated=self._correlated(sym, df, sig, price, acct))
         verdict, note = "", ""
         blocked_by = ""
         jev_id, jev_p, jev_note = None, None, ""
@@ -278,6 +281,30 @@ class Engine:
                                      applied=int(applied), cost=v.cost, model=v.model, taken=0)
         note = f"JEV p={v.p:.2f}{' · ' + v.regime if v.regime else ''} → {v.verdict}{'' if gating else ' (shadow)'}"
         return sid, v.p, note, (max(0.0, float(v.mult)) if applied else 1.0)
+
+    def _correlated(self, sym: str, df: pd.DataFrame, sig: Signal, price: float, acct: Account) -> dict[str, float]:
+        """Open positions whose returns move with this symbol's -> their stop distance (fraction of price)."""
+        rc = self.cfg["risk"]
+        try:
+            n = int(rc.get("correlation_bars") or 200)
+            rets = np.log(df["close"]).diff().dropna().tail(n)
+            self._rets[sym] = rets
+            if sig.atr and price > 0:
+                self._stop_pct[sym] = float(rc["atr_stop_mult"]) * float(sig.atr) / price
+            if not float(rc.get("correlated_risk_pct") or 0.0):
+                return {}
+            out = {}
+            for other, p in acct.positions.items():
+                if other == sym or not p.qty or other not in self._rets:
+                    continue
+                a, b = rets.align(self._rets[other], join="inner")
+                if len(a) >= 50 and a.std() > 0 and b.std() > 0 and \
+                        float(np.corrcoef(a, b)[0, 1]) >= float(rc.get("correlation_threshold", 0.7)):
+                    out[other] = self._stop_pct.get(other, float(rc["atr_stop_mult"]) * 0.01)
+            return out
+        except Exception as e:  # noqa: BLE001 - a missing correlation estimate must not stop trading
+            log.warning("correlation check failed for %s: %s", sym, e)
+            return {}
 
     def _scale_new_risk(self, dec: RiskDecision, mult: float, pos: Any, price: float) -> None:
         """Shrink only the part of an order that adds risk. Reviews and filters never block an exit.

@@ -117,6 +117,10 @@ The Brain → JEV tab shows the evidence for each check, so you can promote them
 
 OpenRouter works too: set `url: https://openrouter.ai/api/alpha/decisions`, `model: ~typesafe/jev-latest`, `api_key_env: OPENROUTER_API_KEY`.
 
+## Correlated risk
+
+The risk manager treats positions that move together as one bet. Before adding risk, it checks which open positions have had a return correlation of at least `correlation_threshold` (0.7) over the last 200 bars. Their combined stop-risk, plus the new trade's, is capped at `correlated_risk_pct` (2% of equity). With the default 1% risk per trade, that allows two fully sized BTC/ETH/SOL-style positions at once, not three. `max_open_positions` (default 5) caps how many symbols can be held. Neither limit forces a cut of what's already held, and neither ever blocks an exit.
+
 ## Entry filters (price action, volatility maths, order flow)
 
 Six rule-based checks run on every **new entry**. They never touch exits. Like JEV, they start in **shadow** mode, which records what each filter would have done and changes nothing.
