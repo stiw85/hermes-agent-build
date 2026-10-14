@@ -137,7 +137,7 @@ def _run(tmp_path, now, filters, name):
 
 
 def test_act_mode_reduces_size_instead_of_skipping(tmp_path, now):
-    off = {k: {"enabled": False} for k in ("levels", "stretch", "flow", "events")}
+    off = {k: {"enabled": False} for k in ("levels", "stretch", "flow", "events", "htf_bias")}
     base = _run(tmp_path, now, {"enabled": False}, "base")
     half = _run(tmp_path, now, {"mode": "act", **off, "vol": {"max_expansion": 0.0, "iv": False, "reduce_to": 0.5}},
                 "half")

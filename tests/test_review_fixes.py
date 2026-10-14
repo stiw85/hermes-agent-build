@@ -61,7 +61,7 @@ def qty(eng):
 
 def test_flip_closes_the_old_position_even_when_filters_skip_new_risk(tmp_path, now):
     """Review HIGH 1: an act-mode filter used to veto the whole flip order, leaving the long open."""
-    off = {k: {"enabled": False} for k in ("levels", "stretch", "flow", "vol")}
+    off = {k: {"enabled": False} for k in ("levels", "stretch", "flow", "vol", "htf_bias")}
     blackout = {"mode": "act", **off, "events": {"enabled": True, "before_minutes": 600, "after_minutes": 600,
                                                  "dates": [f"{now:%Y-%m-%d %H:%M} UTC test-event"]}}
     eng, _ = engine(tmp_path, now, blackout)
@@ -164,7 +164,7 @@ def test_coin_m_klines_use_base_asset_volume():
 def test_replay_counts_reduce_filters_as_partial():
     df = make_df(1500, seed=7, trend=0.0, vol=0.012)
     s = make("sma_cross", {"fast": 10, "slow": 30})
-    c = {**DEFAULTS["filters"], **{k: {"enabled": False} for k in ("levels", "stretch", "flow", "events")},
+    c = {**DEFAULTS["filters"], **{k: {"enabled": False} for k in ("levels", "stretch", "flow", "events", "htf_bias")},
          "vol": {"enabled": True, "max_expansion": 0.0, "iv": False, "reduce_to": 0.5}}
     out = evaluate_history(df, s.targets(df), EntryFilters(c, DEFAULTS["risk"]), 12)
     v = out["filters"]["vol"]

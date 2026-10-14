@@ -119,7 +119,7 @@ OpenRouter works too: set `url: https://openrouter.ai/api/alpha/decisions`, `mod
 
 ## Entry filters (price action, volatility maths, order flow)
 
-Five rule-based checks run on every **new entry**. They never touch exits. Like JEV, they start in **shadow** mode, which records what each filter would have done and changes nothing.
+Six rule-based checks run on every **new entry**. They never touch exits. Like JEV, they start in **shadow** mode, which records what each filter would have done and changes nothing.
 
 | Filter | Idea | Fails when |
 |---|---|---|
@@ -127,7 +127,8 @@ Five rule-based checks run on every **new entry**. They never touch exits. Like 
 | `stretch` | Black-Scholes-Merton volatility maths: don't chase | The last 24 bars moved more than ±2σ in the trade's direction |
 | `flow` | Order flow | A CVD divergence points against the trade. Needs taker volume (Binance); otherwise it passes |
 | `vol` | Volatility regime | Realised vol is more than 2× its normal level, or implied vol is more than 1.3× its own 30-day median. Implied vol comes from Deribit DVOL for BTC/ETH and CBOE VIX for stocks. In act mode it halves the size instead of skipping |
-| `events` | Macro calendar | The entry falls within ±60 min of a listed FOMC or CPI release. The built-in list runs to 2027; keep it updated |
+| `events` | Macro calendar and earnings | The entry falls within ±60 min of a listed FOMC or CPI release (built-in list to 2027; keep it updated), or within 14 days before a symbol-tagged event such as `"2026-10-29 16:00 America/New_York @AAPL earnings"` |
+| `htf_bias` | Top-down bias (The Trading Cafe) | The trade goes against the weekly structure (HH/HL or LH/LL; when the week is ranging, its 3-week momentum), or against the daily structure when the weekly picture is mixed |
 
 ```bash
 hermes-trader filters                                         # live shadow stats per filter

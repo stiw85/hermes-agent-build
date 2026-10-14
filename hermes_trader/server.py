@@ -310,7 +310,7 @@ class Service:
             df = self.app.engine.broker.fetch_ohlcv(sym, cfg["timeframe"], bars)
         fc = cfg["filters"]
         f = self.app.engine.filters or EntryFilters(fc, cfg["risk"], None, cfg["timeframe"])
-        res = evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)))
+        res = evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)), symbol=sym)
         return clean({"symbol": sym, "strategy": repr(strat), "bars": len(df), **res})
 
     def optimize(self, body: dict[str, Any]) -> dict[str, Any]:

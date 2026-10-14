@@ -319,9 +319,10 @@ const FILTER_LABEL: Record<FilterName, { name: string; what: string }> = {
   stretch: { name: 'Stretch (σ)', what: "Don't chase a move already beyond ±2σ." },
   flow: { name: 'Order flow', what: 'No long into a bearish CVD divergence (shorts: bullish).' },
   vol: { name: 'Volatility regime', what: 'Volatility exploding, or options pricing a big move: trade smaller.' },
-  events: { name: 'Event blackout', what: 'No new entries around FOMC / CPI.' }
+  events: { name: 'Event blackout', what: 'No new entries around FOMC / CPI, or a stock\'s earnings.' },
+  htf_bias: { name: 'Higher-timeframe bias', what: 'No trades against the weekly structure; daily confirms.' }
 }
-const FILTER_ORDER: FilterName[] = ['levels', 'stretch', 'flow', 'vol', 'events']
+const FILTER_ORDER: FilterName[] = ['htf_bias', 'levels', 'stretch', 'flow', 'vol', 'events']
 
 const signedPct = (v: number | null | undefined, d = 2) => (v == null ? '—' : `${v > 0 ? '+' : ''}${v.toFixed(d)}%`)
 const toneOf = (v: number | null | undefined) => (v == null ? 'text-fg-4' : v > 0 ? 'text-ok' : v < 0 ? 'text-danger' : 'text-fg-3')

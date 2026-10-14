@@ -177,7 +177,8 @@ class Toolkit:
         strat = make(strategy, params or {}) if strategy else self.e.book.strategy_for(symbol)
         fc = self.cfg["filters"]
         f = self.e.filters or EntryFilters(fc, self.cfg["risk"], None, self.cfg["timeframe"])
-        return {"strategy": repr(strat), **evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)))}
+        return {"strategy": repr(strat), **evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)),
+                                                              symbol=symbol)}
 
     def run_backtest(self, symbol: str, strategy: str, params: dict | None = None, bars: int = 1500) -> dict:
         df = self._df(symbol, min(int(bars), 10_000))

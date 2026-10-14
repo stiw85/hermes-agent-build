@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -159,7 +159,7 @@ def test_shadow_changes_nothing_and_scores_checks(tmp_path, now):
                                               "levels": {"min_rr": 50.0}, "stretch": {"max_z": 0.01}}, name="s")
     assert fills_of(base) and fills_of(base) == fills_of(shadow)
     rows = shadow.journal.filter_rows()
-    assert {r["name"] for r in rows} == {"levels", "stretch", "flow", "vol", "events"}
+    assert {r["name"] for r in rows} == {"levels", "stretch", "flow", "vol", "events", "htf_bias"}
     assert all(r["applied"] == 0 for r in rows) and any(not r["passed"] for r in rows)
     assert any(r["resolved_ts"] for r in rows)
     d = shadow.journal.rows("SELECT risk_notes FROM decisions WHERE risk_notes LIKE '%would skip (shadow)%'")
@@ -205,8 +205,9 @@ def test_history_replay_has_no_lookahead():
     full = evaluate_history(df, s.targets(df), f, 12, details=True)
     part = evaluate_history(df.iloc[:1200], s.targets(df.iloc[:1200]), f, 12, details=True)
     assert full["entries"] > 5
-    a = {r["ts"]: (r["levels"]["passed"], r["stretch"]["passed"]) for r in full["entries_detail"]}
-    b = {r["ts"]: (r["levels"]["passed"], r["stretch"]["passed"]) for r in part["entries_detail"]}
+    names = ("levels", "stretch", "flow", "vol", "events", "htf_bias")
+    a = {r["ts"]: tuple((r[n]["passed"], r[n]["value"]) for n in names) for r in full["entries_detail"]}
+    b = {r["ts"]: tuple((r[n]["passed"], r[n]["value"]) for n in names) for r in part["entries_detail"]}
     shared = set(a) & set(b)
     assert len(shared) >= len(b) - 1 and all(a[k] == b[k] for k in shared)
     lv = full["filters"]["levels"]
@@ -218,3 +219,40 @@ def test_price_context_facts():
     c = cx.price_context(df, None)
     assert c["expected_move"]["band_1s"][0] < c["price"] < c["expected_move"]["band_1s"][1]
     assert "nearest_support" in c and isinstance(c["levels"], list)
+
+
+def test_structure_and_htf_bias():
+    zig_up = [100, 104, 101, 106, 103, 109, 105, 112, 108, 115, 111, 118]  # higher highs and higher lows
+    up = []
+    for a, b in zip(zig_up, zig_up[1:], strict=False):
+        up += list(np.linspace(a, b, 4))[:-1]
+    d = frame(up)
+    assert cx.structure(d, 2) == 1
+    assert cx.structure(frame([200 - x for x in up]), 2) == -1
+    # weekly uptrend built from daily bars
+    days = []
+    for wk, (a, b) in enumerate(zip(zig_up, zig_up[1:], strict=False)):
+        days += list(np.linspace(a, b, 8))[:-1]
+    daily = frame(days)
+    bias = cx.htf_bias(daily, now=daily.index[-1] + pd.Timedelta(days=1))
+    assert bias["bias"] == 1
+    f = mk_filters()
+    now = daily.index[-1] + pd.Timedelta(days=1)
+    assert f.check_htf_bias(1, daily, now).passed
+    short = f.check_htf_bias(-1, daily, now)
+    assert not short.passed and "against the trend" in short.note
+    down = frame([300 - x for x in days])
+    assert not f.check_htf_bias(1, down, now).passed and f.check_htf_bias(-1, down, now).passed
+
+
+def test_symbol_tagged_events_blackout_only_that_symbol():
+    f = mk_filters(events={"enabled": True, "symbol_before_days": 14, "symbol_after_days": 1,
+                           "dates": ["2026-10-29 16:00 America/New_York @AAPL earnings",
+                                     "2026-11-02 00:00 UTC @BTC halving-ish"]})
+    t = datetime(2026, 10, 20, 15, 0, tzinfo=timezone.utc)
+    r = f.check_events(t, "AAPL")
+    assert not r.passed and "@AAPL earnings in 9 days" in r.note
+    assert f.check_events(t, "MSFT").passed
+    assert not f.check_events(t, "BTC/USDT").passed  # @BTC matches the BTC/USDT pair
+    assert f.check_events(datetime(2026, 11, 1, 12, tzinfo=timezone.utc), "AAPL").passed  # > 1 day after
+    assert f.check_events(datetime(2026, 10, 10, tzinfo=timezone.utc), "AAPL").passed  # > 14 days before

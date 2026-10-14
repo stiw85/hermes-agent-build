@@ -277,7 +277,7 @@ def test_filters_endpoints_and_cvd(tmp_path):
     svc = Service(app)
     app.engine.cycle()
     rep = svc.filters({})
-    assert rep["enabled"] and set(rep["filters"]) == {"levels", "stretch", "flow", "vol", "events"}
+    assert rep["enabled"] and set(rep["filters"]) == {"levels", "stretch", "flow", "vol", "events", "htf_bias"}
     sym = app.engine.symbols[0]
     out = svc.filter_replay({"symbol": sym, "strategy": "sma_cross", "bars": 1500})
     assert out["entries"] > 0 and "levels" in out["filters"]

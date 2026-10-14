@@ -245,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
             df = e.broker.fetch_ohlcv(sym, cfg["timeframe"], a.bars)
             strat = make(a.strategy, json.loads(a.params)) if a.strategy else e.book.strategy_for(sym)
             f = e.filters or EntryFilters(fc, cfg["risk"], None, cfg["timeframe"])
-            res = evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)))
+            res = evaluate_history(df, strat.targets(df), f, int(fc.get("horizon_bars", 12)), symbol=sym)
             _p({"symbol": sym, "strategy": repr(strat), "bars": len(df), **res})
         else:
             _p(filter_report(e.journal.filter_rows(), fc))

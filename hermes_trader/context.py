@@ -98,6 +98,53 @@ def pivots(df: pd.DataFrame, k: int) -> tuple[list[float], list[float]]:
     return highs, lows
 
 
+def completed_days(daily: pd.DataFrame, now: Any = None) -> pd.DataFrame:
+    """Daily bars without today's in-progress one (today = the UTC day of `now`, default: now)."""
+    if daily is None or daily.empty:
+        return daily
+    today = pd.Timestamp(now if now is not None else pd.Timestamp.now(tz="UTC"))
+    today = (today.tz_localize("UTC") if today.tzinfo is None else today.tz_convert("UTC")).normalize()
+    last = daily.index[-1]
+    last = (last.tz_localize("UTC") if last.tzinfo is None else last.tz_convert("UTC")).normalize()
+    return daily.iloc[:-1] if last >= today else daily
+
+
+def structure(bars: pd.DataFrame, k: int = 2) -> int:
+    """Market structure from the last two confirmed swing highs and lows.
+
+    +1 = higher high and higher low (uptrend), -1 = lower high and lower low (downtrend), 0 = mixed/unknown.
+    """
+    if bars is None or len(bars) < 4 * k + 2:
+        return 0
+    hs, ls = pivots(bars, k)
+    if len(hs) < 2 or len(ls) < 2:
+        return 0
+    if hs[-1] > hs[-2] and ls[-1] > ls[-2]:
+        return 1
+    if hs[-1] < hs[-2] and ls[-1] < ls[-2]:
+        return -1
+    return 0
+
+
+def htf_bias(daily: pd.DataFrame, now: Any = None, momentum_weeks: int = 3) -> dict[str, Any]:
+    """The Trading Cafe's top-down bias: weekly structure first; if the week is ranging, the last
+    `momentum_weeks` weeks' momentum; daily structure as confirmation. Only completed bars are used."""
+    done = completed_days(daily, now)
+    out: dict[str, Any] = {"weekly": 0, "momentum": 0, "daily": 0, "bias": 0}
+    if done is None or len(done) < 15:
+        return out
+    weekly = done.resample("W-SUN").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
+    if done.index[-1].dayofweek != 6:
+        weekly = weekly.iloc[:-1]  # the current week isn't finished
+    out["weekly"] = structure(weekly, 2)
+    if len(weekly) > momentum_weeks:
+        chg = weekly["close"].iloc[-1] / weekly["close"].iloc[-1 - momentum_weeks] - 1
+        out["momentum"] = 1 if chg > 0.01 else -1 if chg < -0.01 else 0
+    out["daily"] = structure(done, 2)
+    out["bias"] = out["weekly"] or out["momentum"]
+    return out
+
+
 def round_step(price: float) -> float:
     """Spacing of 'psychological' numbers: 60,000 -> 5,000; 3,000 -> 500; 150 -> 50; 0.62 -> 0.05."""
     return 10 ** math.floor(math.log10(price)) / 2 if price > 0 and math.isfinite(price) else 0.0

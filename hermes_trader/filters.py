@@ -13,6 +13,9 @@ Filters
           a short below -max_z.
 - flow    (order flow):   a long fails while a bearish CVD divergence is active (a short: bullish).
           Needs taker volume (Binance / synthetic / CSV with taker_buy); passes when there is none.
+- vol / events: volatility regime (act: reduce size) and macro / per-symbol (@AAPL earnings) blackouts.
+- htf_bias (top-down):    a long fails against the weekly structure (or its 3-week momentum when the
+          week is ranging), or against the daily structure when the weekly picture is mixed.
 """
 
 from __future__ import annotations
@@ -28,9 +31,9 @@ import pandas as pd
 
 from . import indicators as ind
 from .backtest import timeframe_seconds
-from .context import describe_level, key_levels, nearest_levels, p_touch, sigma_per_bar, stretch_z, to_daily
+from .context import describe_level, htf_bias, key_levels, nearest_levels, p_touch, sigma_per_bar, stretch_z, to_daily
 
-FILTER_NAMES = ("levels", "stretch", "flow", "vol", "events")
+FILTER_NAMES = ("levels", "stretch", "flow", "vol", "events", "htf_bias")
 log = logging.getLogger("hermes_trader.filters")
 
 
@@ -155,8 +158,21 @@ class EntryFilters:
         if self.enabled("vol"):
             out.append(self.check_vol(df, symbol, implied))
         if self.enabled("events"):
-            out.append(self.check_events(now or df.index[-1].to_pydatetime()))
+            out.append(self.check_events(now or df.index[-1].to_pydatetime(), symbol))
+        if self.enabled("htf_bias"):
+            out.append(self.check_htf_bias(side, daily, now if now is not None else df.index[-1]))
         return out
+
+    def check_htf_bias(self, side: int, daily: pd.DataFrame, now: Any) -> FilterResult:
+        """Trade with the weekly structure (or its recent momentum when ranging); daily confirms."""
+        b = htf_bias(daily, now, int(self.sub("htf_bias").get("momentum_weeks", 3)))
+        word = {1: "up", -1: "down", 0: "mixed"}
+        note = (f"weekly {word[b['weekly']]}" + ("" if b["weekly"] else f" (3-week momentum {word[b['momentum']]})")
+                + f", daily {word[b['daily']]}")
+        against = b["bias"] * side < 0 or (b["bias"] == 0 and b["daily"] * side < 0)
+        if not b["bias"] and not b["daily"] and self.sub("htf_bias").get("skip_without_bias", False):
+            return FilterResult("htf_bias", False, 0.0, note + "; no clear bias")
+        return FilterResult("htf_bias", not against, float(b["bias"]), note + ("; against the trend" if against else ""))
 
     def implied_vol(self, symbol: str) -> tuple[float, float, str] | None:
         if self.iv is None or not self.sub("vol").get("iv", True):
@@ -242,20 +258,44 @@ class EntryFilters:
         note = "; ".join(parts) + ("; stressed: trade smaller" if stressed else "")
         return FilterResult("vol", not stressed, round(exp, 3), note, mult=float(vc.get("reduce_to", 0.5)))
 
-    def check_events(self, now: datetime) -> FilterResult:
+    @staticmethod
+    def _event_symbols(label: str) -> set[str]:
+        return {tok[1:].upper() for tok in label.split() if tok.startswith("@") and len(tok) > 1}
+
+    @staticmethod
+    def _applies(tags: set[str], symbol: str) -> bool:
+        if not tags:
+            return True  # market-wide (FOMC, CPI)
+        sym = symbol.upper()
+        return sym in tags or sym.split("/")[0] in tags
+
+    def check_events(self, now: datetime, symbol: str = "") -> FilterResult:
+        """Market-wide events: ±minutes. Events tagged @SYMBOL (e.g. earnings): days before / after."""
         ec = self.sub("events")
-        before = pd.Timedelta(minutes=int(ec.get("before_minutes", 60)))
-        after = pd.Timedelta(minutes=int(ec.get("after_minutes", 60)))
+        windows = {
+            False: (pd.Timedelta(minutes=int(ec.get("before_minutes", 60))),
+                    pd.Timedelta(minutes=int(ec.get("after_minutes", 60)))),
+            True: (pd.Timedelta(days=float(ec.get("symbol_before_days", 14))),
+                   pd.Timedelta(days=float(ec.get("symbol_after_days", 1)))),
+        }
         ts = pd.Timestamp(now)
         ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+        upcoming = []
         for when, label in self.events:
+            tags = self._event_symbols(label)
+            if not self._applies(tags, symbol):
+                continue
+            before, after = windows[bool(tags)]
             w = pd.Timestamp(when)
             if w - before <= ts <= w + after:
                 mins = int((w - ts).total_seconds() // 60)
-                rel = f"in {mins} min" if mins > 0 else f"{-mins} min ago"
-                return FilterResult("events", False, float(mins), f"{label} {rel} (blackout ±window)",
+                rel = (f"in {mins} min" if mins > 0 else f"{-mins} min ago") if abs(mins) < 2880 else \
+                      (f"in {mins / 1440:.0f} days" if mins > 0 else f"{-mins / 1440:.0f} days ago")
+                return FilterResult("events", False, float(mins), f"{label} {rel} (blackout window)",
                                     mult=0.5 if ec.get("action", "skip") == "reduce" else 0.0)
-        nxt = next(((w, lab) for w, lab in self.events if pd.Timestamp(w) > ts), None)
+            if w > ts:
+                upcoming.append((w, label))
+        nxt = min(upcoming) if upcoming else None
         return FilterResult("events", True, None, f"next event: {nxt[1]} {nxt[0]:%Y-%m-%d %H:%M}Z" if nxt
                             else "no upcoming events listed")
 
@@ -299,7 +339,7 @@ def filter_report(rows: list[dict[str, Any]], cfg: dict[str, Any]) -> dict[str, 
 
 
 def evaluate_history(df: pd.DataFrame, targets: pd.Series, filters: EntryFilters, horizon: int,
-                     daily: pd.DataFrame | None = None, details: bool = False) -> dict[str, Any]:
+                     daily: pd.DataFrame | None = None, details: bool = False, symbol: str = "") -> dict[str, Any]:
     """Replay a strategy's entries over history and split them by each filter's verdict.
 
     Entry = a bar where the target turns non-zero or flips side. Trade return runs from that bar's
@@ -336,7 +376,8 @@ def evaluate_history(df: pd.DataFrame, targets: pd.Series, filters: EntryFilters
                                      "volume": [part["volume"].sum()]}, index=[day])])
         entries += 1
         # live decisions happen when bar i closes, i.e. at its open time + one bar
-        verdicts = filters.evaluate(side, float(close[i]), hist, atr[i], d, now=(df.index[i] + step).to_pydatetime())
+        verdicts = filters.evaluate(side, float(close[i]), hist, atr[i], d, symbol=symbol,
+                                    now=(df.index[i] + step).to_pydatetime())
         for r in verdicts:
             per[r.name]["passed" if r.passed else "blocked"].append((trade, fwd, max(0.0, r.mult)))
         if details:

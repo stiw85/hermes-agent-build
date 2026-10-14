@@ -44,7 +44,7 @@ function ConfigCard() {
                 label: 'Entry filters',
                 value: !c.filters?.enabled
                   ? 'Off'
-                  : `${c.filters.mode} · ${(['levels', 'stretch', 'flow', 'vol', 'events'] as const)
+                  : `${c.filters.mode} · ${(['htf_bias', 'levels', 'stretch', 'flow', 'vol', 'events'] as const)
                       .filter(n => (c.filters?.[n] as { enabled?: boolean } | undefined)?.enabled !== false)
                       .map(n => {
                         const m = (c.filters?.[n] as { mode?: string } | undefined)?.mode

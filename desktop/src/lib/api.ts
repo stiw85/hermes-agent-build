@@ -246,7 +246,7 @@ export interface Candles {
   cvd?: number[] | null
 }
 
-export type FilterName = 'levels' | 'stretch' | 'flow' | 'vol' | 'events'
+export type FilterName = 'levels' | 'stretch' | 'flow' | 'vol' | 'events' | 'htf_bias'
 
 export interface FilterStats {
   enabled: boolean

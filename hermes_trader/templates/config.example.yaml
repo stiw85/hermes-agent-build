@@ -110,9 +110,15 @@ filters:
     before_minutes: 60
     after_minutes: 60
     action: skip     # skip | reduce
+    symbol_before_days: 14   # events tagged @SYMBOL (earnings): blackout days before / after
+    symbol_after_days: 1
     # dates: replaces the built-in list (FOMC to 2027, CPI to Jan 2027). Times in their own zone:
     # - "2026-10-28 14:00 America/New_York FOMC"
     # - "2026-11-10 08:30 America/New_York CPI (Oct)"
+    # - "2026-10-29 16:00 America/New_York @AAPL earnings"   # only AAPL, 14 days before
+  htf_bias:          # top-down: no trades against the weekly structure (or 3-week momentum); daily confirms
+    enabled: true
+    skip_without_bias: false   # true = also skip when weekly and daily are both mixed
 
 # ---- self-improvement -------------------------------------------------------------
 improve:

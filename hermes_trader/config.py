@@ -96,7 +96,12 @@ DEFAULTS: dict[str, Any] = {
         "vol": {"enabled": True, "short_bars": 24, "long_bars": 720, "max_expansion": 2.0, "iv": True,
                 "max_iv_jump": 1.3, "reduce_to": 0.5},
         # scheduled macro events (times with an IANA zone; FOMC 2:00pm ET, CPI 8:30am ET). Keep it updated.
-        "events": {"enabled": True, "before_minutes": 60, "after_minutes": 60, "action": "skip", "dates": [
+        # top-down bias (The Trading Cafe): no trades against weekly structure / momentum; daily confirms
+        "htf_bias": {"enabled": True, "momentum_weeks": 3, "skip_without_bias": False},
+        # events tagged @SYMBOL (e.g. "2026-10-29 16:00 America/New_York @AAPL earnings") black out that
+        # symbol for symbol_before_days before / symbol_after_days after
+        "events": {"enabled": True, "before_minutes": 60, "after_minutes": 60, "action": "skip",
+                   "symbol_before_days": 14, "symbol_after_days": 1, "dates": [
             "2026-10-28 14:00 America/New_York FOMC",
             "2026-11-10 08:30 America/New_York CPI (Oct)",
             "2026-12-09 14:00 America/New_York FOMC",
