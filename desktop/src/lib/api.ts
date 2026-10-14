@@ -1,0 +1,399 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { ApiResult, BackendState, TraderBridge } from '../../shared/ipc.ts'
+
+type Bridge = TraderBridge & {
+  windowControl(a: 'minimize' | 'maximize' | 'close'): void
+  onMaximized(cb: (m: boolean) => void): () => void
+}
+
+declare global {
+  interface Window {
+    trader: Bridge
+  }
+}
+
+export const trader = (): Bridge => window.trader
+
+// ---- API shapes (mirror hermes_trader/server.py) -------------------------------------------
+
+export interface PositionRow {
+  qty: number
+  avg: number
+  px: number
+  upnl: number
+}
+
+export interface RiskState {
+  day: string
+  start_of_day_equity: number
+  peak_equity: number
+  trades_today: number
+  halted: boolean
+  halt_reason: string
+}
+
+export interface BotState {
+  running: boolean
+  /** asked to stop, still finishing the cycle in progress */
+  stopping: boolean
+  next_cycle: string | null
+  last_tick: string | null
+  last_error: string | null
+  started_at: string | null
+}
+
+export interface Status {
+  mode: 'paper' | 'live'
+  broker: string
+  /** null only while the very first snapshot is blocked by a running cycle (busy) */
+  equity: number | null
+  cash: number | null
+  currency: string
+  positions: Record<string, PositionRow>
+  risk: RiskState
+  strategies: Record<string, string>
+  last_cycle: string | null
+  version: string
+  symbols: string[]
+  timeframe: string
+  llm_enabled: boolean
+  jev_mode: 'off' | 'shadow' | 'gate' | 'error'
+  allow_short: boolean
+  day_pnl: number | null
+  day_pnl_pct: number | null
+  drawdown_pct: number | null
+  realized_pnl: number | null
+  closed_trades: number | null
+  bot: BotState
+  /** a cycle was running: these numbers are the last snapshot */
+  busy?: boolean
+}
+
+export interface EquityRow {
+  ts: string
+  equity: number
+  cash: number
+  gross_exposure: number
+}
+
+export interface Fill {
+  id: number
+  ts: string
+  order_id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  qty: number
+  price: number
+  fee: number
+  status: string
+  strategy: string
+  reason: string
+  realized_pnl: number | null
+}
+
+export interface Decision {
+  id: number
+  ts: string
+  symbol: string
+  strategy: string
+  params: string | null
+  target: number
+  price: number
+  signal_reason: string
+  risk_notes: string
+  llm_verdict: string
+  llm_note: string
+  action: string
+  jev_p: number | null
+  jev_note: string | null
+}
+
+export interface JevBucket {
+  bucket: string
+  trades: number
+  win_rate: number | null
+  avg_p: number | null
+  pnl: number
+}
+
+export interface CheckBucket {
+  bucket: string
+  n: number
+  avg_fwd_pct: number | null
+  up_share: number | null
+}
+
+export interface JevChecks {
+  mode: 'shadow' | 'act'
+  horizon_bars: number
+  regime_block_below: number
+  exit_above: number
+  checks: number
+  errors: number
+  cost_usd: number
+  regime: { scored: number; buckets: CheckBucket[]; recommendation: string; seen: Record<string, number> }
+  exit: { scored: number; buckets: CheckBucket[]; recommendation: string }
+}
+
+export interface JevReport {
+  enabled: boolean
+  /** set when JEV is enabled but could not start (e.g. missing key); the bot trades without it */
+  error?: string | null
+  mode?: 'shadow' | 'gate'
+  veto_below?: number
+  reduce_below?: number
+  scored?: number
+  taken?: number
+  resolved?: number
+  open?: number
+  errors?: number
+  cost_usd?: number
+  brier?: number | null
+  brier_base_rate?: number | null
+  buckets?: JevBucket[]
+  what_if_gate_pnl?: number
+  by_regime?: Record<string, { trades: number; wins: number; pnl: number }>
+  recommendation?: string
+  checks?: JevChecks
+  recent?: { ts: string; symbol: string; side: string; strategy: string; p: number | null; regime: string | null; verdict: string | null; applied: number; taken: number; outcome_pnl: number | null; closed_ts: string | null; error: string | null }[]
+}
+
+export interface EventRow {
+  id: number
+  ts: string
+  kind: string
+  message: string
+  data: string | null
+}
+
+export interface Metrics {
+  strategy: string
+  params: Record<string, unknown>
+  bars: number
+  total_return: number
+  cagr: number
+  sharpe: number
+  sortino: number
+  max_drawdown: number
+  volatility: number
+  trades: number
+  win_rate: number
+  profit_factor: number | null
+  exposure: number
+  fees_paid_pct: number
+}
+
+export interface BookEntry {
+  strategy: string
+  params: Record<string, number>
+  version: number
+  source: string
+  promoted_at?: string
+  metrics?: { holdout?: Metrics; score?: number; bars?: number; why?: string }
+  history?: Omit<BookEntry, 'history'>[]
+}
+
+export interface StrategyDef {
+  name: string
+  description: string
+  defaults: Record<string, number>
+  grid: Record<string, number[]>
+}
+
+export interface KeyLevel {
+  price: number
+  kinds: string[]
+  strength: number
+}
+
+export interface PriceContext {
+  price: number
+  expected_move?: { bars: number; sigma_pct: number; band_1s: [number, number]; band_2s: [number, number] }
+  stretch_z_24?: number | null
+  levels?: KeyLevel[]
+  at_level?: string | null
+  nearest_support?: string
+  nearest_resistance?: string
+  support_dist_pct?: number | null
+  resistance_dist_pct?: number | null
+  order_flow?: { net_aggression_24b: number; net_aggression_last_bar: number; cvd_divergence: string; last_bar: string }
+  [k: string]: unknown
+}
+
+export interface Snapshot {
+  last: number
+  bar_time: string
+  bars: number
+  chg_24: number | null
+  chg_100: number | null
+  vol_annual: number | null
+  rsi14: number | null
+  atr_pct: number | null
+  trend_sma50_200: string
+  range_100: [number, number]
+  context?: PriceContext
+}
+
+export interface Candles {
+  symbol: string
+  timeframe: string
+  candles: [number, number, number, number, number, number][]
+  snapshot: Snapshot
+  strategy: BookEntry
+  fills: { ts: string; side: 'buy' | 'sell'; qty: number; price: number; strategy: string; realized_pnl: number | null }[]
+  jev?: { ts: string; regime: string | null; regime_conf: number | null; p: number | null; mode: string; applied: number; error: string | null } | null
+  /** cumulative volume delta per candle; null when the venue has no taker volume */
+  cvd?: number[] | null
+}
+
+export type FilterName = 'levels' | 'stretch' | 'flow' | 'vol' | 'events' | 'htf_bias'
+
+export interface FilterStats {
+  enabled: boolean
+  mode: 'shadow' | 'act'
+  checks: number
+  would_block: number
+  applied: number
+  scored: number
+  avg_fwd_pct_blocked: number | null
+  avg_fwd_pct_passed: number | null
+  recommendation: string
+}
+
+export interface FilterReport {
+  enabled: boolean
+  mode: 'shadow' | 'act'
+  horizon_bars: number
+  filters: Record<FilterName, FilterStats>
+  recent: { ts: string; symbol: string; strategy: string; name: string; side_sign: number; passed: number; applied: number; mode: string; value: number | null; note: string | null; fwd_ret: number | null; resolved_ts: string | null; error: string | null }[]
+}
+
+export interface ReplayGroup {
+  n: number
+  avg_trade_pct: number | null
+  win_rate: number | null
+  avg_fwd_pct: number | null
+}
+
+export interface FilterReplay {
+  symbol: string
+  strategy: string
+  bars: number
+  entries: number
+  horizon_bars: number
+  filters: Record<FilterName, { blocked: ReplayGroup; passed: ReplayGroup; pnl_if_acting_pct: number; pnl_without_pct: number; verdict: string }>
+}
+
+export interface Stats {
+  fills: number
+  closed_trades: number
+  realized_pnl: number
+  by_strategy_symbol: { strategy: string; symbol: string; closes: number; pnl: number; wins: number; fees: number; win_rate: number }[]
+  max_drawdown: number
+}
+
+export interface Candidate {
+  strategy: string
+  params: Record<string, number>
+  train_score: number
+  train: { sharpe: number; total_return: number; max_drawdown: number; trades: number }
+  holdout?: Metrics
+  holdout_score?: number | null
+}
+
+export interface OptimizeReport {
+  symbol: string
+  incumbent: BookEntry
+  incumbent_score: number | null
+  best: Candidate | null
+  promoted: boolean
+  passes: boolean
+  reason: string
+  leaderboard: Candidate[]
+}
+
+export interface BacktestResponse {
+  result: Metrics
+  buy_and_hold: { total_return: number; sharpe: number; max_drawdown: number }
+  curve: [number, number, number][]
+}
+
+export interface ConfigView {
+  mode: string
+  symbols: string[]
+  timeframe: string
+  history_bars: number
+  allow_short: boolean
+  default_strategy: { name: string; params: Record<string, number> }
+  risk: Record<string, number>
+  improve: Record<string, unknown>
+  schedule: Record<string, unknown>
+  broker: Record<string, unknown>
+  llm: Record<string, unknown>
+  filters?: { enabled: boolean; mode: string } & Record<string, unknown>
+  home: string
+  config_path: string | null
+}
+
+// ---- calls ---------------------------------------------------------------------------------
+
+export async function get<T>(path: string): Promise<T> {
+  const r: ApiResult<T> = await trader().get<T>(path)
+  if (!r.ok) throw new Error(r.error || `HTTP ${r.status}`)
+  return r.data as T
+}
+
+export async function post<T>(path: string, body?: Record<string, unknown>): Promise<T> {
+  const r: ApiResult<T> = await trader().post<T>(path, body)
+  if (!r.ok) throw new Error(r.error || `HTTP ${r.status}`)
+  return r.data as T
+}
+
+/** Poll a GET endpoint while mounted (and the window is visible). `refresh()` forces a reload. */
+export function usePoll<T>(path: string | null, intervalMs = 5000): { data: T | null; error: string | null; loading: boolean; refresh: () => void } {
+  const [data, setData] = useState<T | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const seq = useRef(0)
+  const lastJson = useRef<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (!path) return
+    const n = ++seq.current
+    try {
+      const d = await get<T>(path)
+      if (n === seq.current) {
+        // unchanged data -> keep the same object, so pages and charts don't re-render for nothing
+        const j = JSON.stringify(d)
+        if (j !== lastJson.current) {
+          lastJson.current = j
+          setData(d)
+        }
+        setError(null)
+      }
+    } catch (err) {
+      if (n === seq.current) setError(err instanceof Error ? err.message : String(err))
+    }
+  }, [path])
+
+  useEffect(() => {
+    setData(null)
+    lastJson.current = null
+    void load()
+    if (!intervalMs) return
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') void load()
+    }, intervalMs)
+    return () => clearInterval(t)
+  }, [load, intervalMs])
+
+  return { data, error, loading: data === null && error === null, refresh: () => void load() }
+}
+
+export function useBackendState(): BackendState | null {
+  const [s, setS] = useState<BackendState | null>(null)
+  useEffect(() => {
+    void trader().backendState().then(setS)
+    return trader().onBackendState(setS)
+  }, [])
+  return s
+}

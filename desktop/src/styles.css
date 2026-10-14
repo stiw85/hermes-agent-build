@@ -1,0 +1,468 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens adapted from Herald OS (MIT, (c) Luke The Dev): "deep-blue glass on a living wallpaper".
+ * Components reference tokens, never literals.
+ */
+@theme {
+  /* A family chosen in Settings (--user-font-*) goes first; the stacks stay as fallbacks. */
+  --font-sans: var(--user-font-ui, -apple-system), BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: var(--user-font-mono, 'SF Mono'), 'JetBrains Mono', 'Fira Code', Menlo, ui-monospace, monospace;
+
+  /* Base and glass fills. */
+  --color-bg: #050f33;
+  --color-bg-elevated: rgba(8, 26, 84, 0.8);
+  --color-glass: rgba(7, 22, 76, 0.74);
+  --color-glass-2: rgba(18, 46, 122, 0.42);
+  --color-glass-3: rgba(34, 76, 170, 0.5);
+  --color-surface: rgba(8, 24, 78, 0.6);
+  --color-surface-2: rgba(18, 46, 122, 0.42);
+  --color-surface-3: rgba(34, 76, 170, 0.5);
+
+  /* Strokes. */
+  --color-line: rgba(140, 180, 255, 0.26);
+  --color-line-strong: rgba(170, 205, 255, 0.55);
+  --color-hairline: rgba(140, 180, 255, 0.26);
+  --color-hairline-strong: rgba(170, 205, 255, 0.55);
+
+  /* Text. */
+  --color-fg: #f3f7ff;
+  --color-fg-2: rgba(216, 228, 255, 0.84);
+  --color-fg-3: rgba(176, 196, 245, 0.68);
+  --color-fg-4: rgba(146, 170, 228, 0.48);
+
+  /* Fixed white and black for things that stay paper-white in every theme (toggle knobs, logo
+     tiles, document previews); light themes swap Tailwind's white and black for the overlays. */
+  --color-paper: #ffffff;
+  --color-ink: #000000;
+
+  /* Chart series (validated: dark surface #0b1c51, CVD-safe). Never reuse ok/danger for series. */
+  --color-series-1: #4a8af7;
+  --color-series-2: #c2802a;
+
+  /* Accent and semantics. */
+  --color-accent: #2f7dff;
+  --color-accent-strong: #5296ff;
+  --color-accent-soft: rgba(47, 125, 255, 0.24);
+  --color-accent-fg: #ffffff;
+  --color-ok: #36e6a6;
+  --color-progress: #3ad4ff;
+  --color-warn: #f2c25e;
+  --color-danger: #ff6d6d;
+  --color-info: #7cc4ff;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+
+  --shadow-float: 0 2px 6px rgba(0, 8, 40, 0.35), 0 24px 60px rgba(0, 6, 40, 0.55);
+  --shadow-panel: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 12px 40px rgba(0, 8, 50, 0.45);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 6px 20px rgba(0, 8, 50, 0.3);
+
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --animate-fade-in: fade-in 160ms var(--ease-out);
+  --animate-rise: rise 220ms var(--ease-out);
+  --animate-pulse-soft: pulse-soft 1.6s ease-in-out infinite;
+  --animate-pop: pop 200ms var(--ease-out);
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+:root {
+  color-scheme: dark;
+  --z-wallpaper: 0;
+  --z-windows: 10;
+  --z-dock: 40;
+  --z-menubar: 45;
+  --z-panel: 50;
+  --z-overlay: 60;
+  --z-request: 70;
+  --z-command: 80;
+  --z-boot: 100;
+  --glass-blur: 22px;
+  --menubar-h: 30px;
+  --dock-h: 78px;
+}
+
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+.selectable {
+  user-select: text;
+}
+
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar, rgba(170, 200, 255, 0.22)) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--scrollbar, rgba(170, 200, 255, 0.22));
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 1.5px solid var(--color-accent-strong);
+  outline-offset: 1px;
+  border-radius: var(--radius-xs);
+}
+
+button {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+  user-select: text;
+}
+
+/* ---- Glass primitives -------------------------------------------------------------------- */
+
+.glass {
+  background: var(--color-glass);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  box-shadow: var(--shadow-panel);
+  border: 1px solid var(--color-line);
+}
+
+.glass-card {
+  background: var(--color-glass-2);
+  border: 1px solid var(--color-line);
+  box-shadow: var(--shadow-card);
+  transition:
+    background-color 140ms var(--ease-out),
+    border-color 140ms var(--ease-out),
+    transform 140ms var(--ease-out),
+    box-shadow 140ms var(--ease-out);
+}
+
+.glass-card-hover:hover {
+  background: var(--color-glass-3);
+  border-color: var(--color-line-strong);
+}
+
+.glass-card-selected {
+  background: var(--color-glass-3);
+  border-color: var(--color-accent-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 0 1px rgba(82, 150, 255, 0.35),
+    0 10px 30px rgba(0, 8, 50, 0.4);
+}
+
+.glass-input {
+  background: var(--color-input, rgba(6, 18, 60, 0.55));
+  border: 1px solid var(--color-line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.glass-input:focus-within {
+  border-color: var(--color-accent-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 3px rgba(47, 125, 255, 0.22);
+}
+
+.hairline {
+  box-shadow: 0 0 0 1px var(--color-line);
+}
+
+.float {
+  background: var(--color-bg-elevated);
+  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  box-shadow: var(--shadow-float);
+  border: 1px solid var(--color-line-strong);
+}
+
+/* Menus sit over thumbnails and text; keep them almost opaque so their items stay readable. */
+.float.menu-surface {
+  background: color-mix(in srgb, var(--color-bg) 94%, transparent);
+}
+
+.icon-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, var(--tile-from, rgba(60, 120, 255, 0.55)), var(--tile-to, rgba(30, 70, 190, 0.55)));
+  border: 1px solid var(--tile-border, rgba(160, 200, 255, 0.35));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 6px 16px rgba(0, 10, 60, 0.35);
+  color: var(--tile-fg, #eaf2ff);
+}
+
+.text-shadow-soft {
+  text-shadow: 0 1px 12px rgba(0, 10, 60, 0.45);
+}
+
+
+/* ---- Markdown (playbooks, chat) --------------------------------------------------------- */
+
+.prose-hermes {
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+.prose-hermes > * + * {
+  margin-top: 0.6em;
+}
+.prose-hermes p {
+  margin: 0;
+}
+.prose-hermes h1,
+.prose-hermes h2,
+.prose-hermes h3,
+.prose-hermes h4 {
+  font-weight: 600;
+  color: var(--color-fg);
+  margin-top: 1em;
+  line-height: 1.3;
+}
+.prose-hermes h1 {
+  font-size: 1.35em;
+}
+.prose-hermes h2 {
+  font-size: 1.15em;
+}
+.prose-hermes h3 {
+  font-size: 1.05em;
+}
+.prose-hermes ul,
+.prose-hermes ol {
+  padding-left: 1.4em;
+  margin: 0;
+}
+.prose-hermes ul {
+  list-style: disc;
+}
+.prose-hermes ol {
+  list-style: decimal;
+}
+.prose-hermes li + li {
+  margin-top: 0.2em;
+}
+.prose-hermes li::marker {
+  color: var(--color-accent-strong);
+}
+.prose-hermes a {
+  color: var(--color-accent-strong);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--color-accent-strong) 40%, transparent);
+}
+.prose-hermes code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: rgba(6, 18, 60, 0.6);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-xs);
+}
+.prose-hermes pre {
+  background: rgba(4, 14, 50, 0.7);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.9rem;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.prose-hermes pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+}
+.prose-hermes blockquote {
+  border-left: 2px solid var(--color-line-strong);
+  padding-left: 0.8em;
+  color: var(--color-fg-2);
+}
+.prose-hermes table {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.prose-hermes th,
+.prose-hermes td {
+  padding: 0.35em 0.7em;
+  box-shadow: 0 0 0 1px var(--color-line);
+  text-align: left;
+}
+.prose-hermes th {
+  color: var(--color-fg-2);
+  font-weight: 500;
+}
+.prose-hermes hr {
+  border: 0;
+  height: 1px;
+  background: var(--color-line);
+}
+.prose-hermes input[type='checkbox'] {
+  accent-color: var(--color-accent);
+  margin-right: 0.4em;
+}
+
+
+/* ---- Motion utilities -------------------------------------------------------------------- */
+
+.stagger > * {
+  animation: rise 260ms var(--ease-out) both;
+}
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 30ms; }
+.stagger > *:nth-child(3) { animation-delay: 60ms; }
+.stagger > *:nth-child(4) { animation-delay: 90ms; }
+.stagger > *:nth-child(5) { animation-delay: 120ms; }
+.stagger > *:nth-child(6) { animation-delay: 150ms; }
+.stagger > *:nth-child(7) { animation-delay: 180ms; }
+.stagger > *:nth-child(8) { animation-delay: 210ms; }
+.stagger > *:nth-child(9) { animation-delay: 240ms; }
+.stagger > *:nth-child(n + 10) { animation-delay: 270ms; }
+
+.page-enter {
+  animation: page-in 180ms var(--ease-out) both;
+}
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+.shimmer {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.04) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:root[data-reduce-motion='true'] *,
+:root[data-reduce-motion='true'] *::before,
+:root[data-reduce-motion='true'] *::after {
+  animation-duration: 0.01ms !important;
+  transition-duration: 0.01ms !important;
+}
+
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Visual effects levels (Settings → Appearance; see lib/effects.ts) ---------------------- */
+
+/* Looping animations only in "full": an endless animation keeps the compositor busy every frame. */
+:root:not([data-effects='full']) .animate-pulse-soft {
+  animation: none;
+}
+
+/* "low": no backdrop blur. Re-blurring the background is the single most expensive thing the
+   window does on a machine without GPU acceleration. Panels get near-opaque fills instead. */
+:root[data-effects='low'] .glass,
+:root[data-effects='low'] .float {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-effects='low'] .glass {
+  background: rgba(7, 22, 76, 0.9);
+}
+:root[data-effects='low'] .float {
+  background: rgba(8, 26, 84, 0.97);
+}
+:root[data-effects='low'] .backdrop-blur-sm {
+  backdrop-filter: none;
+}
+:root[data-effects='low'] .shimmer {
+  animation: none;
+}

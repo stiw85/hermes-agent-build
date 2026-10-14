@@ -1,0 +1,140 @@
+# Hermes Trader configuration. Secrets (API keys) go in .env, never here.
+mode: paper            # paper | live  (live also needs HERMES_TRADER_LIVE=I_UNDERSTAND_REAL_MONEY)
+home: ./data           # journal, strategy book, lessons, playbooks, broker state
+
+# ---- broker -----------------------------------------------------------------
+# paper  : simulated fills. data_source = synthetic | csv | ccxt (real crypto prices, no keys) | alpaca
+# ccxt   : real crypto exchange. paper mode REQUIRES sandbox: true (exchange testnet)
+# alpaca : US stocks/ETFs + crypto. paper mode uses Alpaca's free paper account
+broker:
+  name: paper
+  data_source: synthetic
+  starting_cash: 10000
+  fee_bps: 10          # used by paper fills AND backtests: keep realistic
+  slippage_bps: 5
+  exchange: binance    # ccxt id: binance, bybit, kraken, okx, coinbase, ...
+  sandbox: true
+  paper: true          # alpaca: must be false (plus the env latch) for mode: live
+  stock_feed: iex      # alpaca: iex (free) | sip (paid)
+  crypto_feed: us
+  csv_dir: ./data/csv
+
+# crypto pairs use a slash (BTC/USDT, or BTC/USD on Alpaca); stocks are bare tickers (SPY, AAPL)
+symbols: [BTC/USDT, ETH/USDT]
+timeframe: 1h          # 1m 5m 15m 1h 4h 1d
+history_bars: 500
+allow_short: false     # spot/cash accounts: keep false
+
+default_strategy:      # used until the optimizer promotes something better
+  name: sma_cross
+  params: {fast: 20, slow: 50}
+
+# ---- hard risk limits (the LLM cannot change these) -----------------------------
+risk:
+  max_position_pct: 0.20
+  max_gross_exposure_pct: 0.80
+  max_order_notional: 2500
+  min_order_notional: 10
+  risk_per_trade_pct: 0.01
+  atr_stop_mult: 2.0
+  max_daily_loss_pct: 0.03
+  max_drawdown_pct: 0.15
+  rebalance_threshold: 0.10
+  max_trades_per_day: 20
+  max_open_positions: 5        # no new symbol beyond this many open positions
+  correlated_risk_pct: 0.02    # combined stop-risk of positions moving together (corr >= 0.7) <= 2% equity
+
+# ---- LLM brain (optional; the bot trades fine without it) -------------------------
+llm:
+  enabled: false
+  provider: auto          # auto | openai (any /chat/completions API) | anthropic (Claude API direct)
+  base_url: https://openrouter.ai/api/v1   # or http://localhost:11434/v1 for Ollama
+  model: nousresearch/hermes-4-70b
+  api_key_env: LLM_API_KEY
+  # Claude direct with your Anthropic (Claude Console) API key:
+  #   provider: anthropic
+  #   base_url: https://api.anthropic.com
+  #   model: claude-haiku-5-5        # or claude-sonnet-5-5 / claude-opus-5-5
+  #   and LLM_API_KEY=sk-ant-api... (or ANTHROPIC_API_KEY=...) in .env
+  trade_review: true     # LLM may shrink or veto new risk, never enlarge it
+  on_review_error: reduce  # LLM down / garbage reply: reduce (half size) | veto | proceed
+  max_tool_iterations: 12
+
+# ---- JEV decision model (TypeSafe; optional) ----------------------------------------------
+# Scores every new entry with a calibrated probability that it is worth taking.
+# Start in shadow mode: it changes nothing, and `hermes-trader jev` / the Brain page show whether
+# its confident calls actually win. Switch to gate only once the report shows an edge.
+jev:
+  enabled: false
+  mode: shadow           # shadow | gate  (gate can only shrink or veto entries, never enlarge or block exits)
+  url: https://api.typesafe.ai/v1/systemone   # OpenRouter: https://openrouter.ai/api/alpha/decisions
+  model: jev-latest                           # OpenRouter: ~typesafe/jev-latest
+  api_key_env: TYPESAFE_API_KEY               # OpenRouter: OPENROUTER_API_KEY
+  veto_below: 0.40       # gate: skip entries Jev rates below this
+  reduce_below: 0.55     # gate: half size below this
+  on_error: proceed      # gate mode if Jev is unreachable: proceed | reduce | veto
+  min_shadow_trades: 30
+  checks:                # every bar, every symbol, one JEV call: regime, strategy fit, exit (if holding)
+    enabled: true
+    mode: shadow         # shadow | act  (act may only block NEW entries or close positions)
+    regime_block_below: 0.35
+    exit_above: 0.70
+    horizon_bars: 6      # each answer is scored against what price did this many bars later
+    min_resolved: 50
+
+# ---- entry filters (price action + volatility maths; deterministic, free) ------------------
+# Checked on every new entry. shadow = only record what they would do; act = skip failing entries.
+# `hermes-trader filters` shows whether entries they'd block really did worse; add
+# `--backtest BTC/USDT --strategy rsi_reversion` to replay history through them right away.
+filters:
+  enabled: true
+  mode: shadow
+  horizon_bars: 12
+  levels:            # room to the next daily/weekly key level (swings, prev day/week high-low, round numbers)
+    enabled: true
+    min_rr: 1.5      # distance to that level / ATR-stop distance
+    # mode: act      # per-filter override
+  stretch:           # don't chase: last 24-bar move in sigmas (Black-Scholes volatility maths)
+    enabled: true
+    bars: 24
+    max_z: 2.0
+  flow:              # order flow: no new long into a bearish CVD divergence (needs Binance taker volume)
+    enabled: true
+    bars: 24
+  vol:               # volatility regime -> trade at reduce_to size (act mode) when stressed
+    enabled: true
+    max_expansion: 2.0   # last 24 bars' realised vol vs the last 720 bars'
+    iv: true             # also read implied vol: Deribit DVOL (BTC/ETH), CBOE VIX (US stocks)
+    max_iv_jump: 1.3     # implied vol this many times its own 30-day median = options expect trouble
+    reduce_to: 0.5
+  events:            # no new entries around scheduled macro events (all symbols)
+    enabled: true
+    before_minutes: 60
+    after_minutes: 60
+    action: skip     # skip | reduce
+    symbol_before_days: 14   # events tagged @SYMBOL (earnings): blackout days before / after
+    symbol_after_days: 1
+    # dates: replaces the built-in list (FOMC to 2027, CPI to Jan 2027). Times in their own zone:
+    # - "2026-10-28 14:00 America/New_York FOMC"
+    # - "2026-11-10 08:30 America/New_York CPI (Oct)"
+    # - "2026-10-29 16:00 America/New_York @AAPL earnings"   # only AAPL, 14 days before
+  htf_bias:          # top-down: no trades against the weekly structure (or 3-week momentum); daily confirms
+    enabled: true
+    skip_without_bias: false   # true = also skip when weekly and daily are both mixed
+
+# ---- self-improvement -------------------------------------------------------------
+improve:
+  lookback_bars: 2000
+  train_fraction: 0.7
+  min_trades: 8
+  min_improvement: 0.10
+  max_drawdown: 0.25
+  max_candidates: 60
+  strategies: [sma_cross, ema_cross, rsi_reversion, donchian_breakout, bollinger_reversion, trend_rsi, fib_retracement, market_structure, flow_reversal,
+               sid_method, double_top_bottom, head_shoulders, supply_demand]
+  reflect_after_trades: 10
+  promote_cooldown_hours: 24   # max one agent-requested promotion per symbol per window
+
+schedule:
+  cycle_minutes: null    # null = every bar close of `timeframe`
+  improve_every_hours: 24
