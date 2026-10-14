@@ -231,7 +231,7 @@ def test_structure_and_htf_bias():
     assert cx.structure(frame([200 - x for x in up]), 2) == -1
     # weekly uptrend built from daily bars
     days = []
-    for wk, (a, b) in enumerate(zip(zig_up, zig_up[1:], strict=False)):
+    for a, b in zip(zig_up, zig_up[1:], strict=False):
         days += list(np.linspace(a, b, 8))[:-1]
     daily = frame(days)
     bias = cx.htf_bias(daily, now=daily.index[-1] + pd.Timedelta(days=1))
