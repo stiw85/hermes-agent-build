@@ -65,7 +65,9 @@ function ConfigCard() {
               { label: 'ATR stop', value: `${r.atr_stop_mult}× ATR` },
               { label: 'Daily loss → reduce-only', value: fmtPct(r.max_daily_loss_pct, 1) },
               { label: 'Drawdown → kill switch', value: fmtPct(r.max_drawdown_pct, 0) },
-              { label: 'Max trades per day', value: String(r.max_trades_per_day) }
+              { label: 'Max trades per day', value: String(r.max_trades_per_day) },
+              { label: 'Max open positions', value: r.max_open_positions ? String(r.max_open_positions) : 'No limit' },
+              { label: 'Correlated risk', value: r.correlated_risk_pct ? `${fmtPct(r.correlated_risk_pct, 1)} combined (corr ≥ ${r.correlation_threshold ?? 0.7})` : 'Off' }
             ]}
           />
         </div>
