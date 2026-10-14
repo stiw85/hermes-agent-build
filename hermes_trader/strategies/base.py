@@ -29,6 +29,11 @@ class Strategy(ABC):
         unknown = set(params) - set(self.defaults)
         if unknown:
             raise ValueError(f"{self.name}: unknown params {sorted(unknown)}")
+        # YAML/JSON may hand over 20.0 for an integer parameter: coerce whole numbers back to int
+        for k, v in list(params.items()):
+            if isinstance(self.defaults.get(k), int) and not isinstance(self.defaults.get(k), bool) \
+                    and isinstance(v, float) and v.is_integer():
+                params[k] = int(v)
         self.params = {**self.defaults, **params}
         if not self.valid(self.params):
             raise ValueError(f"{self.name}: invalid params {self.params}")

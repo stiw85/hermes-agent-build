@@ -103,7 +103,8 @@ DEFAULTS: dict[str, Any] = {
                 "max_iv_jump": 1.3, "reduce_to": 0.5},
         # scheduled macro events (times with an IANA zone; FOMC 2:00pm ET, CPI 8:30am ET). Keep it updated.
         # top-down bias (The Trading Cafe): no trades against weekly structure / momentum; daily confirms
-        "htf_bias": {"enabled": True, "momentum_weeks": 3, "skip_without_bias": False},
+        # starts in shadow even if filters.mode is act: it needs its own track record first
+        "htf_bias": {"enabled": True, "mode": "shadow", "momentum_weeks": 3, "skip_without_bias": False},
         # events tagged @SYMBOL (e.g. "2026-10-29 16:00 America/New_York @AAPL earnings") black out that
         # symbol for symbol_before_days before / symbol_after_days after
         "events": {"enabled": True, "before_minutes": 60, "after_minutes": 60, "action": "skip",

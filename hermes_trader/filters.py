@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -69,7 +70,7 @@ def parse_events(items: list[Any]) -> tuple[list[tuple[datetime, str]], list[str
             else:
                 when, rest = f"{parts[0]}T{parts[1] if len(parts) > 1 else '00:00'}", parts[2:]
             tz = "UTC"
-            if rest and ("/" in rest[0] or rest[0].upper() in ("UTC", "Z", "GMT")):
+            if rest and not rest[0].startswith("@") and ("/" in rest[0] or rest[0].upper() in ("UTC", "Z", "GMT")):
                 tz, rest = ("UTC" if rest[0].upper() in ("UTC", "Z", "GMT") else rest[0]), rest[1:]
             elif rest and rest[0].upper().strip(",") in _TZ_ABBREV:
                 raise ValueError(f"time zone '{rest[0]}' is ambiguous; use an IANA name such as America/New_York")
@@ -150,7 +151,7 @@ class EntryFilters:
                  implied: tuple[float, float, str] | None = None) -> list[FilterResult]:
         out = []
         if self.enabled("levels"):
-            out.append(self.check_levels(side, price, df, atr, daily, now))
+            out.append(self.check_levels(side, price, df, atr, daily, now, symbol))
         if self.enabled("stretch"):
             out.append(self.check_stretch(side, df))
         if self.enabled("flow"):
@@ -160,14 +161,22 @@ class EntryFilters:
         if self.enabled("events"):
             out.append(self.check_events(now or df.index[-1].to_pydatetime(), symbol))
         if self.enabled("htf_bias"):
-            out.append(self.check_htf_bias(side, daily, now if now is not None else df.index[-1]))
+            out.append(self.check_htf_bias(side, daily, now if now is not None else df.index[-1], symbol))
         return out
 
-    def check_htf_bias(self, side: int, daily: pd.DataFrame, now: Any) -> FilterResult:
+    @staticmethod
+    def _week_end(symbol: str) -> int:
+        """Last trading weekday: Friday (4) for equities, Sunday (6) for 24/7 crypto."""
+        from .brokers.base import asset_class_of
+
+        return 4 if symbol and asset_class_of(symbol).value == "equity" else 6
+
+    def check_htf_bias(self, side: int, daily: pd.DataFrame, now: Any, symbol: str = "") -> FilterResult:
         """Trade with the weekly structure (or its recent momentum when ranging); daily confirms."""
-        b = htf_bias(daily, now, int(self.sub("htf_bias").get("momentum_weeks", 3)))
+        weeks = int(self.sub("htf_bias").get("momentum_weeks", 3))
+        b = htf_bias(daily, now, weeks, week_end_day=self._week_end(symbol))
         word = {1: "up", -1: "down", 0: "mixed"}
-        note = (f"weekly {word[b['weekly']]}" + ("" if b["weekly"] else f" (3-week momentum {word[b['momentum']]})")
+        note = (f"weekly {word[b['weekly']]}" + ("" if b["weekly"] else f" ({weeks}-week momentum {word[b['momentum']]})")
                 + f", daily {word[b['daily']]}")
         against = b["bias"] * side < 0 or (b["bias"] == 0 and b["daily"] * side < 0)
         if not b["bias"] and not b["daily"] and self.sub("htf_bias").get("skip_without_bias", False):
@@ -183,13 +192,13 @@ class EntryFilters:
             return None
 
     def check_levels(self, side: int, price: float, df: pd.DataFrame, atr: float | None,
-                     daily: pd.DataFrame, now: datetime | None = None) -> FilterResult:
+                     daily: pd.DataFrame, now: datetime | None = None, symbol: str = "") -> FilterResult:
         lc = self.sub("levels")
         atr = _finite(atr)
         if not atr or not (price > 0):
             return FilterResult("levels", True, None, "no ATR yet")
         lv = key_levels(daily, price, int(lc.get("pivot", 3)), bool(lc.get("round_numbers", True)),
-                        now=now if now is not None else df.index[-1])
+                        now=now if now is not None else df.index[-1], week_end_day=self._week_end(symbol))
         # the level in front counts however close it is: buying just under resistance has ~no room
         sup, res = nearest_levels(lv, price, 0.0)
         target = res if side > 0 else sup
@@ -260,7 +269,8 @@ class EntryFilters:
 
     @staticmethod
     def _event_symbols(label: str) -> set[str]:
-        return {tok[1:].upper() for tok in label.split() if tok.startswith("@") and len(tok) > 1}
+        """'@AAPL, @MSFT earnings' -> {'AAPL', 'MSFT'}; '@BTC/USDT unlock' -> {'BTC/USDT'}."""
+        return {m.upper().rstrip(".,;:)/") for m in re.findall(r"@([A-Za-z0-9._/:-]+)", label)} - {""}
 
     @staticmethod
     def _applies(tags: set[str], symbol: str) -> bool:

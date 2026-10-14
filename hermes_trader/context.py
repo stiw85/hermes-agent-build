@@ -126,7 +126,7 @@ def structure(bars: pd.DataFrame, k: int = 2) -> int:
     return 0
 
 
-def htf_bias(daily: pd.DataFrame, now: Any = None, momentum_weeks: int = 3) -> dict[str, Any]:
+def htf_bias(daily: pd.DataFrame, now: Any = None, momentum_weeks: int = 3, week_end_day: int = 6) -> dict[str, Any]:
     """The Trading Cafe's top-down bias: weekly structure first; if the week is ranging, the last
     `momentum_weeks` weeks' momentum; daily structure as confirmation. Only completed bars are used."""
     done = completed_days(daily, now)
@@ -134,8 +134,8 @@ def htf_bias(daily: pd.DataFrame, now: Any = None, momentum_weeks: int = 3) -> d
     if done is None or len(done) < 15:
         return out
     weekly = done.resample("W-SUN").agg({"open": "first", "high": "max", "low": "min", "close": "last"}).dropna()
-    if done.index[-1].dayofweek != 6:
-        weekly = weekly.iloc[:-1]  # the current week isn't finished
+    if done.index[-1].dayofweek < week_end_day:
+        weekly = weekly.iloc[:-1]  # the current week isn't finished (stocks: Friday closes it)
     out["weekly"] = structure(weekly, 2)
     if len(weekly) > momentum_weeks:
         chg = weekly["close"].iloc[-1] / weekly["close"].iloc[-1 - momentum_weeks] - 1
@@ -151,7 +151,8 @@ def round_step(price: float) -> float:
 
 
 def key_levels(daily: pd.DataFrame, price: float, pivot: int = 3, round_numbers: bool = True,
-               merge_frac: float = 0.25, max_dist: float = 0.25, now: Any = None) -> list[dict[str, Any]]:
+               merge_frac: float = 0.25, max_dist: float = 0.25, now: Any = None,
+               week_end_day: int = 6) -> list[dict[str, Any]]:
     """Support/resistance zones near `price` from daily bars.
 
     A daily bar dated today (UTC, or the day of `now`) is in progress and is not used for levels.
@@ -173,7 +174,7 @@ def key_levels(daily: pd.DataFrame, price: float, pivot: int = 3, round_numbers:
     if len(done) >= 1:
         raw += [(float(done["high"].iloc[-1]), "prev day high"), (float(done["low"].iloc[-1]), "prev day low")]
     weekly = done.resample("W-SUN").agg({"high": "max", "low": "min", "close": "last"}).dropna()
-    if done.index[-1].dayofweek != 6:  # the latest week isn't finished (weeks end on Sunday)
+    if done.index[-1].dayofweek < week_end_day:  # the latest week isn't finished (crypto: Sunday, stocks: Friday)
         weekly = weekly.iloc[:-1]
     if len(weekly) >= 1:
         whs, wls = pivots(weekly, 2)

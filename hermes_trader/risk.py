@@ -106,7 +106,9 @@ class RiskManager:
         # max open positions: no new symbol once the book is full (a position already held may change)
         max_open = int(c.get("max_open_positions") or 0)
         if max_open and adding and not cur_qty and desired:
-            open_n = sum(1 for s, p in account.positions.items() if s != signal.symbol and p.qty)
+            dust = float(c.get("min_order_notional") or 0.0)
+            open_n = sum(1 for s, p in account.positions.items()
+                         if s != signal.symbol and abs(p.qty * (p.market_price or p.avg_price)) >= max(dust, 1e-9))
             if open_n >= max_open:
                 notes.append(f"max open positions ({max_open}) reached: no new symbol")
                 desired = 0.0
@@ -114,9 +116,10 @@ class RiskManager:
         # correlated risk: positions that move together count as one bet
         corr_cap = float(c.get("correlated_risk_pct") or 0.0)
         if corr_cap and correlated and adding and desired and signal.atr and price > 0:
+            # same-direction exposure in instruments that move together is one bet; opposite sides hedge
             used = sum(abs(account.positions[s].qty * (account.positions[s].market_price or account.positions[s].avg_price))
                        * stop for s, stop in correlated.items()
-                       if s in account.positions and account.positions[s].qty)
+                       if s in account.positions and account.positions[s].qty * desired > 0)
             my_stop = c["atr_stop_mult"] * signal.atr / price
             allowed = max(0.0, corr_cap * eq - used) / my_stop if my_stop > 0 else abs(desired)
             keep = abs(cur_val) if desired * cur_val > 0 else 0.0  # never force a cut of what we already hold

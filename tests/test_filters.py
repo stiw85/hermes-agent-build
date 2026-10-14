@@ -173,10 +173,12 @@ def test_act_mode_skips_failing_entries(tmp_path, now):
               name="act")
     buys = [f for f in eng.journal.recent_fills(1000) if f["side"] == "buy"]
     vetoed = eng.journal.rows("SELECT * FROM decisions WHERE action='vetoed by filters'")
-    open_air = [r for r in eng.journal.filter_rows() if r["passed"]]
+    lv = [r for r in eng.journal.filter_rows() if r["name"] == "levels"]
     assert vetoed
-    assert len(buys) <= len(open_air)  # only entries with no level in the way could go through
-    assert all(r["applied"] for r in eng.journal.filter_rows() if not r["passed"])
+    assert len(buys) <= sum(1 for r in lv if r["passed"])  # only entries with no level in the way went through
+    assert all(r["applied"] for r in lv if not r["passed"])
+    # htf_bias keeps its own shadow default even when the global mode is act (review M4)
+    assert all(not r["applied"] for r in eng.journal.filter_rows() if r["name"] == "htf_bias")
 
 
 def test_filter_errors_never_stop_trading(tmp_path, now):

@@ -119,6 +119,7 @@ class Engine:
             self.meta["last_cycle"] = now.isoformat()
             self.save()
             return report
+        self._warm_correlations(acct, now)
         for sym in self.symbols:
             try:
                 report["symbols"][sym] = self._symbol(sym, acct, level, now)
@@ -281,6 +282,27 @@ class Engine:
                                      applied=int(applied), cost=v.cost, model=v.model, taken=0)
         note = f"JEV p={v.p:.2f}{' · ' + v.regime if v.regime else ''} → {v.verdict}{'' if gating else ' (shadow)'}"
         return sid, v.p, note, (max(0.0, float(v.mult)) if applied else 1.0)
+
+    def _warm_correlations(self, acct: Account, now: datetime) -> None:
+        """Held positions need recent returns + stop distance before any symbol sizes against them
+        (after a restart, or when a held symbol's own step returns early)."""
+        rc = self.cfg["risk"]
+        if not float(rc.get("correlated_risk_pct") or 0.0):
+            return
+        tf = self.cfg["timeframe"]
+        for s, p in acct.positions.items():
+            if not p.qty or s in self._rets:
+                continue
+            try:
+                df = closed_bars(self.broker.fetch_ohlcv(s, tf, int(rc.get("correlation_bars") or 200) + 20), tf, now)
+                if len(df) < 60:
+                    continue
+                self._rets[s] = np.log(df["close"]).diff().dropna().tail(int(rc.get("correlation_bars") or 200))
+                a = float(ind.atr(df).iloc[-1])
+                if np.isfinite(a) and df["close"].iloc[-1] > 0:
+                    self._stop_pct[s] = float(rc["atr_stop_mult"]) * a / float(df["close"].iloc[-1])
+            except Exception as e:  # noqa: BLE001 - best effort; the cap just has less to go on
+                log.warning("could not load %s for the correlation check: %s", s, e)
 
     def _correlated(self, sym: str, df: pd.DataFrame, sig: Signal, price: float, acct: Account) -> dict[str, float]:
         """Open positions whose returns move with this symbol's -> their stop distance (fraction of price)."""

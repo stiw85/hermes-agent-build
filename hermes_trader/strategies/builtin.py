@@ -275,14 +275,18 @@ class FlowReversal(Strategy):
 def _confirmed_pivot(h: np.ndarray, lo: np.ndarray, t: int, k: int) -> tuple[str, int, float] | None:
     """Pivot at bar i = t - k, confirmed now: strictly beyond the k bars before, level-or-beyond the k after.
 
-    Returns ("H", i, high) or ("L", i, low); "H" wins if a bar is both (rare outside bar).
+    Returns ("H", i, high) or ("L", i, low); None when the bar is both (an outside bar) or neither.
     """
     i = t - k
     if i < k:
         return None
-    if h[i] > h[i - k: i].max() and h[i] >= h[i + 1: t + 1].max():
+    is_h = h[i] > h[i - k: i].max() and h[i] >= h[i + 1: t + 1].max()
+    is_l = lo[i] < lo[i - k: i].min() and lo[i] <= lo[i + 1: t + 1].min()
+    if is_h and is_l:
+        return None  # an outside bar that is both: ambiguous, and either choice would break long/short symmetry
+    if is_h:
         return ("H", i, float(h[i]))
-    if lo[i] < lo[i - k: i].min() and lo[i] <= lo[i + 1: t + 1].min():
+    if is_l:
         return ("L", i, float(lo[i]))
     return None
 
@@ -326,6 +330,7 @@ class SIDMethod(Strategy):
         long_sig = short_sig = None  # [last extreme bar, extreme price since the signal]
         for t in range(1, n):
             if not (np.isfinite(r[t]) and np.isfinite(r[t - 1]) and np.isfinite(m[t]) and np.isfinite(m[t - 1])):
+                out[t] = pos
                 continue
             # exits: RSI back to the midline (no exceptions), or the structural stop
             if pos > 0 and (r[t] >= p["exit"] or c[t] < stop):
@@ -406,8 +411,15 @@ class DoubleTopBottom(_PatternStrategy):
         p = self.params
 
         def detect(zz, h, lo, c, t, a):  # noqa: ANN001, ANN202
-            # the retest extreme may already be a confirmed swing: then the pattern is the 3 swings before it
-            tail = zz[-4:-1] if len(zz) >= 4 and zz[-1][0] == zz[-3][0] and zz[-4][0] == zz[-2][0] else zz[-3:]
+            # the retest may still be unconfirmed (pattern = last 3 swings) or already a confirmed swing
+            # (pattern = the 3 swings before it): try both, so fast breaks are caught too
+            for tail in (zz[-3:], zz[-4:-1] if len(zz) >= 4 else None):
+                sig = one(tail, h, lo, c, t, a) if tail else None
+                if sig:
+                    return sig
+            return None
+
+        def one(tail, h, lo, c, t, a):  # noqa: ANN001, ANN202
             (k0, i0, s), (k1, i1, x1), (k2, i2, neck) = tail
             if t - i1 < 7 or t - i1 > p["max_len"]:
                 return None
@@ -454,10 +466,14 @@ class HeadShoulders(_PatternStrategy):
         p = self.params
 
         def detect(zz, h, lo, c, t, a):  # noqa: ANN001, ANN202
-            if len(zz) < 4:
-                return None
-            # the right shoulder may already be a confirmed swing: then use the 4 swings before it
-            four = zz[-5:-1] if len(zz) >= 5 and zz[-1][0] == zz[-5][0] else zz[-4:]
+            # the right shoulder may be unconfirmed (last 4 swings) or a confirmed swing (the 4 before it)
+            for four in (zz[-4:] if len(zz) >= 4 else None, zz[-5:-1] if len(zz) >= 5 else None):
+                sig = one(four, h, lo, c, t, a) if four else None
+                if sig:
+                    return sig
+            return None
+
+        def one(four, h, lo, c, t, a):  # noqa: ANN001, ANN202
             (k_ls, i_ls, ls), (_, i_p1, p1), (_, i_hd, hd), (_, i_p2, p2) = four
             if t - i_ls > p["max_len"] or t <= i_p2 or i_p2 == i_p1:
                 return None
@@ -509,12 +525,14 @@ class SupplyDemand(Strategy):
         ll = pd.Series(lo).rolling(p["lookback"]).min().shift(1).to_numpy()
         n = len(df)
         out = np.zeros(n)
-        demand: list[list[float]] = []  # [zone_lo, zone_hi, touches]
+        demand: list[list[float]] = []  # [zone_lo, zone_hi, touches, base bar]
         supply: list[list[float]] = []
+        used_demand = used_supply = -1
         pos, stop, target = 0, 0.0, 0.0
         for t in range(1, n):
             a = atr[t]
             if not (np.isfinite(a) and a > 0 and np.isfinite(hh[t]) and np.isfinite(ll[t])):
+                out[t] = pos
                 continue
             if pos > 0 and (c[t] <= stop or c[t] >= target):
                 pos = 0
@@ -528,34 +546,40 @@ class SupplyDemand(Strategy):
                 if c[t] < z[0]:
                     demand.remove(z)  # broken
                 elif lo[t] <= z[1]:
-                    z[2] += 1
+                    if lo[t - 1] > z[1]:  # a new visit (several bars inside the zone are one touch)
+                        z[2] += 1
                     if z[2] > 2:
                         demand.remove(z)
                     elif pos <= 0 and rng > 0 and c[t] > z[1] and c[t] > mid and (not p["trend"] or rising):
                         st = z[0] - 0.25 * a  # rejection: dipped into the zone, closed back above it, upper half
                         pos, stop, target = 1, st, c[t] + p["rr"] * (c[t] - st)
                         demand.remove(z)
+                        used_demand = z[3]  # a traded zone is never re-created from the same base candle
             for z in list(supply):
                 if c[t] > z[1]:
                     supply.remove(z)
                 elif h[t] >= z[0]:
-                    z[2] += 1
+                    if h[t - 1] < z[0]:
+                        z[2] += 1
                     if z[2] > 2:
                         supply.remove(z)
                     elif pos >= 0 and rng > 0 and c[t] < z[0] and c[t] < mid and (not p["trend"] or falling):
                         st = z[1] + 0.25 * a
                         pos, stop, target = -1, st, c[t] - p["rr"] * (st - c[t])
                         supply.remove(z)
+                        used_supply = z[3]
             # new zones: an impulsive close beyond the recent range, from the last opposite candle (base)
             if c[t] > hh[t]:
                 b = next((j for j in range(t - 1, max(t - 6, 0), -1) if c[j] < o[j]), None)
-                if b is not None and c[t] - lo[b] >= p["impulse_atr"] * a:
-                    demand.append([lo[b], h[b], 0])
+                if b is not None and c[t] - lo[b] >= p["impulse_atr"] * a and all(z[3] != b for z in demand) \
+                        and b != used_demand:
+                    demand.append([lo[b], h[b], 0, b])  # [zone lo, zone hi, touches, base bar]
                     del demand[:-5]
             if c[t] < ll[t]:
                 b = next((j for j in range(t - 1, max(t - 6, 0), -1) if c[j] > o[j]), None)
-                if b is not None and h[b] - c[t] >= p["impulse_atr"] * a:
-                    supply.append([lo[b], h[b], 0])
+                if b is not None and h[b] - c[t] >= p["impulse_atr"] * a and all(z[3] != b for z in supply) \
+                        and b != used_supply:
+                    supply.append([lo[b], h[b], 0, b])
                     del supply[:-5]
             out[t] = pos
         return pd.Series(out, index=df.index)
