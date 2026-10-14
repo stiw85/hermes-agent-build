@@ -51,6 +51,10 @@ STRATEGY_STYLE = {
     "trend_rsi": "buy-the-dip inside an uptrend",
     "market_structure": "price action (buy the retest after a break of structure; exit when structure breaks)",
     "flow_reversal": "order-flow reversal (absorption at a range extreme, then initiation the other way)",
+    "sid_method": "mean reversion (RSI extreme, then RSI and MACD turn; exit at RSI 50)",
+    "double_top_bottom": "reversal pattern (double bottom / top, neckline break)",
+    "head_shoulders": "reversal pattern (head and shoulders, neckline break, measured move)",
+    "supply_demand": "zone retest (fresh supply/demand zone, rejection candle)",
     "fib_retracement": "pullback (buy a Fibonacci retracement of the last swing, or sell one in a down-swing)",
 }
 
